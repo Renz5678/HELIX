@@ -1,0 +1,5 @@
+# Invalid: Illegal character '@' and '$'
+rule BadChars:
+    let rate := 50 @ 10
+    let cost := $100
+end

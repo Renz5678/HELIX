@@ -1,0 +1,4 @@
+# Invalid: Unterminated string
+rule BadString:
+    intent: "Unterminated string literal
+end

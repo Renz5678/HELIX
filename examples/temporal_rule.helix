@@ -1,0 +1,15 @@
+# Clinical Rule: Sustained Tachycardia across temporal window
+rule SustainedTachycardiaRule:
+    intent: "Detect sustained heart rate elevation over consecutive readings"
+    schedule: "every 5m"
+    site: Cardiology
+
+    bind hr_readings = Vitals.heart_rate where status == "final" within 30 minutes
+
+    let max_hr := 120
+
+    when hr_readings.latest >= max_hr within 15 minutes:
+    then:
+        alert: "Sustained Tachycardia Observed", hr_readings.latest
+        suppress: within 1 hours
+end

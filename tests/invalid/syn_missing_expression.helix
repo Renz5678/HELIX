@@ -1,0 +1,6 @@
+# Invalid: Missing expression after comparison operator
+rule MissingExpr:
+    when glucose_data.latest >
+    then:
+        alert: "High"
+end

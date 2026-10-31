@@ -1,0 +1,21 @@
+# Multi-level Sepsis and Shock Alert Rule
+rule SepsisEarlyWarningRule:
+    intent: "Evaluate multi-parameter vital signs for early sepsis deterioration"
+    site: EmergencyDepartment
+    terminology: SNOMED("91302008")
+
+    bind sbp = Vitals.systolic_bp
+    bind temp = Vitals.body_temperature
+    bind wbc = Labs.white_blood_count
+
+    let sbp_crit := 90
+    let temp_high := 38.3
+    let temp_low := 36.0
+
+    when (sbp.latest < sbp_crit) and ((temp.latest > temp_high) or (temp.latest < temp_low)):
+    then:
+        alert: "Potential Septic Shock Risk", "CRITICAL", sbp.latest
+        suppress: within 6 hours
+    otherwise:
+        let observation_status := "monitoring"
+end

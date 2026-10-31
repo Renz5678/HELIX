@@ -1,0 +1,3 @@
+# Invalid: Missing end keyword
+rule UnclosedRule:
+    let x := 10

@@ -1,0 +1,4 @@
+# Invalid: Missing rule name
+rule :
+    let x := 10
+end

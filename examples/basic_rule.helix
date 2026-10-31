@@ -1,0 +1,18 @@
+# Clinical Event Logic Rule: Acute High Glucose Detection
+rule HighGlucoseAlert:
+    intent: "Detect severe acute hyperglycemia in adult inpatients"
+    site: ICU
+    terminology: LOINC("2339-0")
+    source: EHR -> FHIR_R4
+
+    bind glucose_data = Labs.glucose
+
+    let threshold := 180
+    let severe_threshold = 250
+
+    when glucose_data.latest > threshold:
+    then:
+        alert: "High Blood Glucose Detected", "WARNING"
+    otherwise:
+        suppress: within 4 hours
+end

@@ -1,0 +1,5 @@
+# Invalid: Malformed float literal
+rule BadNumber:
+    let x := 12.34.56
+    let y := 42abc
+end

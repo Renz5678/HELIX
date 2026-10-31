@@ -5,11 +5,15 @@
 #include <stdlib.h>
 
 void parser_init(Parser *parser, const TokenList *tokens, DiagnosticEngine *diag) {
-    if (!parser) return;
+    if (!parser)
+        return;
     parser->tokens = tokens;
     parser->current = 0;
     parser->diag = diag;
     parser->panic_mode = false;
+    parser->ast = NULL;
+    parser->parent = NULL;
+    parser->depth = 0;
 }
 
 static Token peek_tok(const Parser *parser) {
@@ -26,9 +30,7 @@ static Token previous_tok(const Parser *parser) {
     return parser->tokens->items[parser->current - 1];
 }
 
-static bool is_at_end(const Parser *parser) {
-    return peek_tok(parser).type == TOKEN_EOF;
-}
+static bool is_at_end(const Parser *parser) { return peek_tok(parser).type == TOKEN_EOF; }
 
 static Token advance_tok(Parser *parser) {
     if (!is_at_end(parser)) {
@@ -38,7 +40,8 @@ static Token advance_tok(Parser *parser) {
 }
 
 static bool check_tok(const Parser *parser, TokenType type) {
-    if (is_at_end(parser)) return false;
+    if (is_at_end(parser))
+        return false;
     return peek_tok(parser).type == type;
 }
 
@@ -51,7 +54,8 @@ static bool match_tok(Parser *parser, TokenType type) {
 }
 
 static void error_at_current(Parser *parser, const char *fmt, ...) {
-    if (parser->panic_mode) return;
+    if (parser->panic_mode)
+        return;
     parser->panic_mode = true;
 
     Token tok = peek_tok(parser);
@@ -63,6 +67,12 @@ static void error_at_current(Parser *parser, const char *fmt, ...) {
 
     if (parser->diag) {
         diag_report(parser->diag, DIAG_SYNTAX_ERROR, tok.line, tok.column, "%s", buf);
+        if (parser->diag->count) {
+            DiagnosticItem *d = &parser->diag->items[parser->diag->count - 1];
+            d->start_offset = tok.start_offset;
+            d->end_offset = tok.end_offset;
+            d->end_column = tok.column + (tok.end_offset - tok.start_offset);
+        }
     }
 }
 
@@ -86,23 +96,23 @@ static void synchronize(Parser *parser) {
     while (!is_at_end(parser)) {
         TokenType t = peek_tok(parser).type;
         switch (t) {
-            case TOKEN_KW_RULE:
-            case TOKEN_KW_END:
-            case TOKEN_KW_INTENT:
-            case TOKEN_KW_SCHEDULE:
-            case TOKEN_KW_TERMINOLOGY:
-            case TOKEN_KW_SITE:
-            case TOKEN_KW_SOURCE:
-            case TOKEN_KW_BIND:
-            case TOKEN_KW_LET:
-            case TOKEN_KW_WHEN:
-            case TOKEN_KW_THEN:
-            case TOKEN_KW_ALERT:
-            case TOKEN_KW_SUPPRESS:
-            case TOKEN_KW_OTHERWISE:
-                return;
-            default:
-                break;
+        case TOKEN_KW_RULE:
+        case TOKEN_KW_END:
+        case TOKEN_KW_INTENT:
+        case TOKEN_KW_SCHEDULE:
+        case TOKEN_KW_TERMINOLOGY:
+        case TOKEN_KW_SITE:
+        case TOKEN_KW_SOURCE:
+        case TOKEN_KW_BIND:
+        case TOKEN_KW_LET:
+        case TOKEN_KW_WHEN:
+        case TOKEN_KW_THEN:
+        case TOKEN_KW_ALERT:
+        case TOKEN_KW_SUPPRESS:
+        case TOKEN_KW_OTHERWISE:
+            return;
+        default:
+            break;
         }
         advance_tok(parser);
     }
@@ -135,9 +145,634 @@ static bool parse_within_clause(Parser *parser);
 static bool parse_duration_expr(Parser *parser);
 static bool parse_argument_list(Parser *parser);
 
+static bool impl_parse_primary_expr(Parser *parser);
+static bool parse_primary_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_PRIMARY, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_primary_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_argument_list(Parser *parser);
+static bool parse_argument_list(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_ARGUMENTS, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_argument_list(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_postfix_expr(Parser *parser);
+static bool parse_postfix_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_POSTFIX, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_postfix_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_comparison_expr(Parser *parser);
+static bool parse_comparison_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_COMPARISON, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_comparison_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_unary_expr(Parser *parser);
+static bool parse_unary_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_UNARY, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_unary_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_and_expr(Parser *parser);
+static bool parse_and_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_AND, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_and_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_or_expr(Parser *parser);
+static bool parse_or_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_OR, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_or_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_expression(Parser *parser);
+static bool parse_expression(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_EXPRESSION, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_expression(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_where_clause(Parser *parser);
+static bool parse_where_clause(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_WHERE, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_where_clause(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_duration_expr(Parser *parser);
+static bool parse_duration_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_DURATION, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_duration_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_within_clause(Parser *parser);
+static bool parse_within_clause(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_WITHIN, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_within_clause(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_intent_decl(Parser *parser);
+static bool parse_intent_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_INTENT, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_intent_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_schedule_decl(Parser *parser);
+static bool parse_schedule_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_SCHEDULE, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_schedule_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_terminology_decl(Parser *parser);
+static bool parse_terminology_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_TERMINOLOGY, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_terminology_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_site_decl(Parser *parser);
+static bool parse_site_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_SITE, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_site_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_source_decl(Parser *parser);
+static bool parse_source_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_SOURCE, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_source_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_bind_decl(Parser *parser);
+static bool parse_bind_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_BIND, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_bind_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_let_decl(Parser *parser);
+static bool parse_let_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_LET, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_let_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_alert_stmt(Parser *parser);
+static bool parse_alert_stmt(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_ALERT, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_alert_stmt(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_suppress_stmt(Parser *parser);
+static bool parse_suppress_stmt(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_SUPPRESS, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_suppress_stmt(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_action_stmt(Parser *parser);
+static bool parse_action_stmt(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_ACTION, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_action_stmt(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_statement_in_branch(Parser *parser);
+static bool parse_statement_in_branch(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_BRANCH_STMT, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_statement_in_branch(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_when_stmt(Parser *parser);
+static bool parse_when_stmt(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_WHEN, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_when_stmt(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_rule_element(Parser *parser);
+static bool parse_rule_element(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_BRANCH_STMT, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_rule_element(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_rule_decl(Parser *parser);
+static bool parse_rule_decl(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_RULE, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_rule_decl(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
 /* --- Expression Parsing --- */
 
-static bool parse_primary_expr(Parser *parser) {
+static bool impl_parse_primary_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_IDENTIFIER)) {
         return true;
     }
@@ -154,7 +789,8 @@ static bool parse_primary_expr(Parser *parser) {
         return true;
     }
     if (match_tok(parser, TOKEN_LPAREN)) {
-        if (!parse_expression(parser)) return false;
+        if (!parse_expression(parser))
+            return false;
         if (!consume_tok(parser, TOKEN_RPAREN, "Expected ')' after grouped expression")) {
             return false;
         }
@@ -166,24 +802,23 @@ static bool parse_primary_expr(Parser *parser) {
 }
 
 static bool is_member_name_token(TokenType t) {
-    return (t == TOKEN_IDENTIFIER ||
-            t == TOKEN_KW_LATEST ||
-            t == TOKEN_KW_SOURCE ||
-            t == TOKEN_KW_SITE ||
-            t == TOKEN_KW_SCHEDULE ||
-            t == TOKEN_KW_TERMINOLOGY);
+    return (t == TOKEN_IDENTIFIER || t == TOKEN_KW_LATEST || t == TOKEN_KW_SOURCE ||
+            t == TOKEN_KW_SITE || t == TOKEN_KW_SCHEDULE || t == TOKEN_KW_TERMINOLOGY);
 }
 
-static bool parse_argument_list(Parser *parser) {
-    if (!parse_expression(parser)) return false;
+static bool impl_parse_argument_list(Parser *parser) {
+    if (!parse_expression(parser))
+        return false;
     while (match_tok(parser, TOKEN_COMMA)) {
-        if (!parse_expression(parser)) return false;
+        if (!parse_expression(parser))
+            return false;
     }
     return true;
 }
 
-static bool parse_postfix_expr(Parser *parser) {
-    if (!parse_primary_expr(parser)) return false;
+static bool impl_parse_postfix_expr(Parser *parser) {
+    if (!parse_primary_expr(parser))
+        return false;
 
     while (true) {
         if (match_tok(parser, TOKEN_DOT)) {
@@ -201,13 +836,16 @@ static bool parse_postfix_expr(Parser *parser) {
                 return false;
             }
         } else if (match_tok(parser, TOKEN_LBRACKET)) {
-            if (!parse_expression(parser)) return false;
-            if (!consume_tok(parser, TOKEN_RBRACKET, "Expected ']' after index/filter expression")) {
+            if (!parse_expression(parser))
+                return false;
+            if (!consume_tok(parser, TOKEN_RBRACKET,
+                             "Expected ']' after index/filter expression")) {
                 return false;
             }
         } else if (match_tok(parser, TOKEN_LPAREN)) {
             if (!check_tok(parser, TOKEN_RPAREN)) {
-                if (!parse_argument_list(parser)) return false;
+                if (!parse_argument_list(parser))
+                    return false;
             }
             if (!consume_tok(parser, TOKEN_RPAREN, "Expected ')' after argument list")) {
                 return false;
@@ -220,14 +858,13 @@ static bool parse_postfix_expr(Parser *parser) {
 }
 
 static bool is_comp_op(TokenType t) {
-    return (t == TOKEN_EQ || t == TOKEN_NEQ ||
-            t == TOKEN_GT || t == TOKEN_GTE ||
-            t == TOKEN_LT || t == TOKEN_LTE ||
-            t == TOKEN_EQUAL);
+    return (t == TOKEN_EQ || t == TOKEN_NEQ || t == TOKEN_GT || t == TOKEN_GTE || t == TOKEN_LT ||
+            t == TOKEN_LTE || t == TOKEN_EQUAL);
 }
 
-static bool parse_comparison_expr(Parser *parser) {
-    if (!parse_postfix_expr(parser)) return false;
+static bool impl_parse_comparison_expr(Parser *parser) {
+    if (!parse_postfix_expr(parser))
+        return false;
 
     if (is_comp_op(peek_tok(parser).type)) {
         advance_tok(parser); /* Consume comparison operator */
@@ -237,51 +874,56 @@ static bool parse_comparison_expr(Parser *parser) {
     }
 
     if (check_tok(parser, TOKEN_KW_WHERE)) {
-        if (!parse_where_clause(parser)) return false;
+        if (!parse_where_clause(parser))
+            return false;
     }
 
     if (check_tok(parser, TOKEN_KW_WITHIN)) {
-        if (!parse_within_clause(parser)) return false;
+        if (!parse_within_clause(parser))
+            return false;
     }
 
     return true;
 }
 
-static bool parse_unary_expr(Parser *parser) {
+static bool impl_parse_unary_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_KW_NOT)) {
         return parse_unary_expr(parser);
     }
     return parse_comparison_expr(parser);
 }
 
-static bool parse_and_expr(Parser *parser) {
-    if (!parse_unary_expr(parser)) return false;
+static bool impl_parse_and_expr(Parser *parser) {
+    if (!parse_unary_expr(parser))
+        return false;
 
     while (match_tok(parser, TOKEN_KW_AND)) {
-        if (!parse_unary_expr(parser)) return false;
+        if (!parse_unary_expr(parser))
+            return false;
     }
     return true;
 }
 
-static bool parse_or_expr(Parser *parser) {
-    if (!parse_and_expr(parser)) return false;
+static bool impl_parse_or_expr(Parser *parser) {
+    if (!parse_and_expr(parser))
+        return false;
 
     while (match_tok(parser, TOKEN_KW_OR)) {
-        if (!parse_and_expr(parser)) return false;
+        if (!parse_and_expr(parser))
+            return false;
     }
     return true;
 }
 
-static bool parse_expression(Parser *parser) {
-    return parse_or_expr(parser);
-}
+static bool impl_parse_expression(Parser *parser) { return parse_or_expr(parser); }
 
-static bool parse_where_clause(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_WHERE, "Expected 'where'")) return false;
+static bool impl_parse_where_clause(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_WHERE, "Expected 'where'"))
+        return false;
     return parse_expression(parser);
 }
 
-static bool parse_duration_expr(Parser *parser) {
+static bool impl_parse_duration_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_INT_LIT) || match_tok(parser, TOKEN_FLOAT_LIT)) {
         /* Optional unit identifier e.g. 'hours', 'minutes', 'days', 'm' */
         if (check_tok(parser, TOKEN_IDENTIFIER)) {
@@ -299,15 +941,17 @@ static bool parse_duration_expr(Parser *parser) {
     return false;
 }
 
-static bool parse_within_clause(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_WITHIN, "Expected 'within'")) return false;
+static bool impl_parse_within_clause(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_WITHIN, "Expected 'within'"))
+        return false;
     return parse_duration_expr(parser);
 }
 
 /* --- Declarations & Statements --- */
 
-static bool parse_intent_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_INTENT, "Expected 'intent'")) return false;
+static bool impl_parse_intent_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_INTENT, "Expected 'intent'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
     if (!consume_tok(parser, TOKEN_STRING_LIT, "Expected string literal after 'intent'")) {
         return false;
@@ -315,8 +959,9 @@ static bool parse_intent_decl(Parser *parser) {
     return true;
 }
 
-static bool parse_schedule_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_SCHEDULE, "Expected 'schedule'")) return false;
+static bool impl_parse_schedule_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_SCHEDULE, "Expected 'schedule'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
     if (check_tok(parser, TOKEN_STRING_LIT)) {
         advance_tok(parser);
@@ -325,15 +970,18 @@ static bool parse_schedule_decl(Parser *parser) {
     return parse_duration_expr(parser);
 }
 
-static bool parse_terminology_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_TERMINOLOGY, "Expected 'terminology'")) return false;
+static bool impl_parse_terminology_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_TERMINOLOGY, "Expected 'terminology'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
-    if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected terminology system name (e.g. LOINC, SNOMED)")) {
+    if (!consume_tok(parser, TOKEN_IDENTIFIER,
+                     "Expected terminology system name (e.g. LOINC, SNOMED)")) {
         return false;
     }
     if (match_tok(parser, TOKEN_LPAREN)) {
         if (!check_tok(parser, TOKEN_RPAREN)) {
-            if (!parse_argument_list(parser)) return false;
+            if (!parse_argument_list(parser))
+                return false;
         }
         if (!consume_tok(parser, TOKEN_RPAREN, "Expected ')' after terminology arguments")) {
             return false;
@@ -345,8 +993,9 @@ static bool parse_terminology_decl(Parser *parser) {
     return true;
 }
 
-static bool parse_site_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_SITE, "Expected 'site'")) return false;
+static bool impl_parse_site_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_SITE, "Expected 'site'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
     if (match_tok(parser, TOKEN_IDENTIFIER) || match_tok(parser, TOKEN_STRING_LIT)) {
         return true;
@@ -355,8 +1004,9 @@ static bool parse_site_decl(Parser *parser) {
     return false;
 }
 
-static bool parse_source_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_SOURCE, "Expected 'source'")) return false;
+static bool impl_parse_source_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_SOURCE, "Expected 'source'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
     if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected source name")) {
         return false;
@@ -368,7 +1018,8 @@ static bool parse_source_decl(Parser *parser) {
     }
     if (match_tok(parser, TOKEN_LPAREN)) {
         if (!check_tok(parser, TOKEN_RPAREN)) {
-            if (!parse_argument_list(parser)) return false;
+            if (!parse_argument_list(parser))
+                return false;
         }
         if (!consume_tok(parser, TOKEN_RPAREN, "Expected ')' after source arguments")) {
             return false;
@@ -377,8 +1028,9 @@ static bool parse_source_decl(Parser *parser) {
     return true;
 }
 
-static bool parse_bind_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_BIND, "Expected 'bind'")) return false;
+static bool impl_parse_bind_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_BIND, "Expected 'bind'"))
+        return false;
     if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected identifier after 'bind'")) {
         return false;
     }
@@ -391,16 +1043,19 @@ static bool parse_bind_decl(Parser *parser) {
         return false;
     }
     if (check_tok(parser, TOKEN_KW_WHERE)) {
-        if (!parse_where_clause(parser)) return false;
+        if (!parse_where_clause(parser))
+            return false;
     }
     if (check_tok(parser, TOKEN_KW_WITHIN)) {
-        if (!parse_within_clause(parser)) return false;
+        if (!parse_within_clause(parser))
+            return false;
     }
     return true;
 }
 
-static bool parse_let_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_LET, "Expected 'let'")) return false;
+static bool impl_parse_let_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_LET, "Expected 'let'"))
+        return false;
     if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected variable name after 'let'")) {
         return false;
     }
@@ -411,18 +1066,22 @@ static bool parse_let_decl(Parser *parser) {
     return parse_expression(parser);
 }
 
-static bool parse_alert_stmt(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_ALERT, "Expected 'alert'")) return false;
+static bool impl_parse_alert_stmt(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_ALERT, "Expected 'alert'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
-    if (!parse_expression(parser)) return false;
+    if (!parse_expression(parser))
+        return false;
     while (match_tok(parser, TOKEN_COMMA)) {
-        if (!parse_expression(parser)) return false;
+        if (!parse_expression(parser))
+            return false;
     }
     return true;
 }
 
-static bool parse_suppress_stmt(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_SUPPRESS, "Expected 'suppress'")) return false;
+static bool impl_parse_suppress_stmt(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_SUPPRESS, "Expected 'suppress'"))
+        return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
     if (check_tok(parser, TOKEN_KW_WITHIN)) {
         return parse_within_clause(parser);
@@ -433,7 +1092,7 @@ static bool parse_suppress_stmt(Parser *parser) {
     return parse_duration_expr(parser);
 }
 
-static bool parse_action_stmt(Parser *parser) {
+static bool impl_parse_action_stmt(Parser *parser) {
     if (check_tok(parser, TOKEN_KW_ALERT)) {
         return parse_alert_stmt(parser);
     }
@@ -445,11 +1104,11 @@ static bool parse_action_stmt(Parser *parser) {
 }
 
 static bool is_statement_start(TokenType t) {
-    return (t == TOKEN_KW_LET || t == TOKEN_KW_ALERT ||
-            t == TOKEN_KW_SUPPRESS || t == TOKEN_KW_WHEN);
+    return (t == TOKEN_KW_LET || t == TOKEN_KW_ALERT || t == TOKEN_KW_SUPPRESS ||
+            t == TOKEN_KW_WHEN);
 }
 
-static bool parse_statement_in_branch(Parser *parser) {
+static bool impl_parse_statement_in_branch(Parser *parser) {
     if (check_tok(parser, TOKEN_KW_LET)) {
         return parse_let_decl(parser);
     }
@@ -463,8 +1122,9 @@ static bool parse_statement_in_branch(Parser *parser) {
     return false;
 }
 
-static bool parse_when_stmt(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_WHEN, "Expected 'when'")) return false;
+static bool impl_parse_when_stmt(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_WHEN, "Expected 'when'"))
+        return false;
 
     if (match_tok(parser, TOKEN_KW_FOR)) {
         if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected identifier after 'for'")) {
@@ -472,7 +1132,8 @@ static bool parse_when_stmt(Parser *parser) {
         }
     }
 
-    if (!parse_expression(parser)) return false;
+    if (!parse_expression(parser))
+        return false;
 
     match_tok(parser, TOKEN_COLON); /* Optional colon before then */
 
@@ -515,38 +1176,41 @@ static bool parse_when_stmt(Parser *parser) {
 }
 
 static bool is_rule_element_start(TokenType t) {
-    return (t == TOKEN_KW_INTENT ||
-            t == TOKEN_KW_SCHEDULE ||
-            t == TOKEN_KW_TERMINOLOGY ||
-            t == TOKEN_KW_SITE ||
-            t == TOKEN_KW_SOURCE ||
-            t == TOKEN_KW_BIND ||
-            t == TOKEN_KW_LET ||
-            t == TOKEN_KW_WHEN ||
-            t == TOKEN_KW_ALERT ||
-            t == TOKEN_KW_SUPPRESS);
+    return (t == TOKEN_KW_INTENT || t == TOKEN_KW_SCHEDULE || t == TOKEN_KW_TERMINOLOGY ||
+            t == TOKEN_KW_SITE || t == TOKEN_KW_SOURCE || t == TOKEN_KW_BIND || t == TOKEN_KW_LET ||
+            t == TOKEN_KW_WHEN || t == TOKEN_KW_ALERT || t == TOKEN_KW_SUPPRESS);
 }
 
-static bool parse_rule_element(Parser *parser) {
+static bool impl_parse_rule_element(Parser *parser) {
     switch (peek_tok(parser).type) {
-        case TOKEN_KW_INTENT:      return parse_intent_decl(parser);
-        case TOKEN_KW_SCHEDULE:    return parse_schedule_decl(parser);
-        case TOKEN_KW_TERMINOLOGY: return parse_terminology_decl(parser);
-        case TOKEN_KW_SITE:        return parse_site_decl(parser);
-        case TOKEN_KW_SOURCE:      return parse_source_decl(parser);
-        case TOKEN_KW_BIND:        return parse_bind_decl(parser);
-        case TOKEN_KW_LET:         return parse_let_decl(parser);
-        case TOKEN_KW_WHEN:        return parse_when_stmt(parser);
-        case TOKEN_KW_ALERT:
-        case TOKEN_KW_SUPPRESS:    return parse_action_stmt(parser);
-        default:
-            error_at_current(parser, "Unexpected token '%s' in rule body", peek_tok(parser).lexeme);
-            return false;
+    case TOKEN_KW_INTENT:
+        return parse_intent_decl(parser);
+    case TOKEN_KW_SCHEDULE:
+        return parse_schedule_decl(parser);
+    case TOKEN_KW_TERMINOLOGY:
+        return parse_terminology_decl(parser);
+    case TOKEN_KW_SITE:
+        return parse_site_decl(parser);
+    case TOKEN_KW_SOURCE:
+        return parse_source_decl(parser);
+    case TOKEN_KW_BIND:
+        return parse_bind_decl(parser);
+    case TOKEN_KW_LET:
+        return parse_let_decl(parser);
+    case TOKEN_KW_WHEN:
+        return parse_when_stmt(parser);
+    case TOKEN_KW_ALERT:
+    case TOKEN_KW_SUPPRESS:
+        return parse_action_stmt(parser);
+    default:
+        error_at_current(parser, "Unexpected token '%s' in rule body", peek_tok(parser).lexeme);
+        return false;
     }
 }
 
-static bool parse_rule_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_RULE, "Expected 'rule'")) return false;
+static bool impl_parse_rule_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_RULE, "Expected 'rule'"))
+        return false;
     if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected rule name identifier")) {
         return false;
     }
@@ -559,7 +1223,8 @@ static bool parse_rule_decl(Parser *parser) {
                 synchronize(parser);
             }
         } else {
-            error_at_current(parser, "Unexpected token '%s' in rule declaration", peek_tok(parser).lexeme);
+            error_at_current(parser, "Unexpected token '%s' in rule declaration",
+                             peek_tok(parser).lexeme);
             synchronize(parser);
         }
     }
@@ -572,7 +1237,8 @@ static bool parse_rule_decl(Parser *parser) {
 }
 
 bool parser_parse(Parser *parser) {
-    if (!parser) return false;
+    if (!parser)
+        return false;
 
     if (is_at_end(parser)) {
         error_at_current(parser, "Empty program: expected at least one rule declaration");
@@ -585,7 +1251,8 @@ bool parser_parse(Parser *parser) {
                 synchronize(parser);
             }
         } else {
-            error_at_current(parser, "Expected 'rule' declaration. Found '%s'", peek_tok(parser).lexeme);
+            error_at_current(parser, "Expected 'rule' declaration. Found '%s'",
+                             peek_tok(parser).lexeme);
             advance_tok(parser);
             while (!is_at_end(parser) && !check_tok(parser, TOKEN_KW_RULE)) {
                 advance_tok(parser);
@@ -595,4 +1262,38 @@ bool parser_parse(Parser *parser) {
     }
 
     return (parser->diag ? parser->diag->syntax_errors == 0 : true);
+}
+
+AstProgram *parser_build_ast(Parser *parser) {
+    AstProgram *p = calloc(1, sizeof(*p));
+    if (!p)
+        return NULL;
+    token_list_init(&p->tokens);
+    for (size_t i = 0; i < parser->tokens->count; i++) {
+        Token old = parser->tokens->items[i];
+        Token t = token_create(old.type, old.lexeme, old.line, old.column);
+        t.start_offset = old.start_offset;
+        t.end_offset = old.end_offset;
+        if (!t.lexeme || !token_list_append(&p->tokens, t)) {
+            token_free(&t);
+            ast_program_free(p);
+            return NULL;
+        }
+    }
+    p->root = ast_node_new(p, AST_PROGRAM, 0);
+    if (!p->root) {
+        ast_program_free(p);
+        return NULL;
+    }
+    parser->ast = p;
+    parser->parent = p->root;
+    bool ok = parser_parse(parser);
+    p->root->end = parser->current;
+    parser->ast = NULL;
+    parser->parent = NULL;
+    if (!ok || p->failed) {
+        ast_program_free(p);
+        return NULL;
+    }
+    return p;
 }

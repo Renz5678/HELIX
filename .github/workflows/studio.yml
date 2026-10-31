@@ -1,0 +1,37 @@
+name: HELIX Studio checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native-and-browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Native compatibility, API, and allocation failure checks
+        run: make -j2 all test test-fault
+      - name: Native address, undefined behavior, and leak checks
+        run: make test-sanitize
+      - name: Set up Emscripten 4.0.23
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git .toolchains/emsdk
+          .toolchains/emsdk/emsdk install 4.0.23
+          .toolchains/emsdk/emsdk activate 4.0.23
+          echo "$PWD/.toolchains/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
+      - name: Real WASM build and parity
+        run: make test-wasm
+      - name: Frontend dependencies and checks
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          npx playwright install --with-deps chromium
+          npm run test:e2e

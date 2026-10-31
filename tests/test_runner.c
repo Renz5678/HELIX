@@ -77,6 +77,7 @@ static bool test_lexer_basic_tokens(void) {
     TEST_ASSERT(tokens.items[7].type == TOKEN_KW_END, "token 7 is end");
     TEST_ASSERT(tokens.items[8].type == TOKEN_EOF, "token 8 is EOF");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
     return true;
@@ -107,6 +108,7 @@ static bool test_lexer_operators_and_positions(void) {
     TEST_ASSERT(tokens.items[7].type == TOKEN_LT, "<");
     TEST_ASSERT(tokens.items[8].type == TOKEN_GT, ">");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
     return true;
@@ -127,6 +129,7 @@ static bool test_lexer_error_detection(void) {
     TEST_ASSERT(!ok, "lexer reports errors");
     TEST_ASSERT(diag.lexical_errors >= 3, "detected at least 3 lexical errors");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
     return true;
@@ -151,6 +154,7 @@ static bool test_parser_valid_minimal(void) {
     TEST_ASSERT(parsed, "minimal rule parsed");
     TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
     return true;
@@ -178,6 +182,7 @@ static bool test_parser_boolean_precedence(void) {
     TEST_ASSERT(parsed, "boolean precedence expression parsed");
     TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
     return true;
@@ -205,6 +210,7 @@ static bool test_file_validation(const char *path, bool expect_valid) {
 
     bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
 

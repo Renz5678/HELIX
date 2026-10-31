@@ -1,3 +1,42 @@
+# HELIX Studio architecture
+
+The browser runs a locally bundled Monaco editor, React shell, and typed Data
+Playground. A dedicated module worker owns one Emscripten engine instance. It
+serializes calls and coalesces queued analysis requests. Source/data revisions
+prevent stale results from replacing a newer workspace snapshot.
+
+The shared ISO C11 pipeline is source -> DFA lexer -> recursive descent parser ->
+ordered AST -> semantic validation -> typed tables and bindings -> per-patient
+evaluation -> owned JSON output. `parser_parse` and `parser_build_ast` use the same
+parsing functions. Ordered grammar nodes retain token ranges, grouping, metadata,
+and branch structure; `AstProgram` owns copied tokens and all nodes. Calls/indexes
+and other historical forms are retained in the tree even when runtime execution
+is unsupported.
+
+DataStore owns a bounded JSON tree and schema views into it. Values are validated
+in C before execution. Binding resolution never falls back to an arbitrary table.
+Patient environments are independent; branch variables are scoped. Selection
+filters by patient, timestamp eligibility, row predicate, and intersected windows
+before selecting the latest reading. Literal/source-span strings are cached with a
+request-wide cap to avoid allocations proportional to rows times literal size.
+
+C APIs borrow input strings and return allocated JSON strings. JS preserves the
+numeric result pointer, copies it to a JS string, parses JSON, and releases result
+and input allocations in finally blocks. Partial trees, tables and diagnostics have
+explicit destructors. Allocation failures propagate across nested serializers;
+no successful response is built from a partial writer. UTF-8 and finite numeric
+boundaries are validated before output.
+
+Read docs/api.md and docs/evaluation.md for the versioned contract and runtime
+rules. Native/WASM parity compares the complete JSON output for all five presets.
+The native compatibility suite, explicit AST/value/JSON tests, repeated API memory
+checks, allocation-failure injection, and real-browser tests cover distinct layers.
+
+The older analyzer architecture is retained below as historical module context.
+Its references to tests or guarantees describe the original analyzer only.
+
+---
+
 # HELIX Analyzer Architecture
 
 ## 1. Architectural Overview

@@ -1,6 +1,6 @@
-# Clinical Rule: Sustained Tachycardia across temporal window
-rule SustainedTachycardiaRule:
-    intent: "Detect sustained heart rate elevation over consecutive readings"
+# Clinical Rule: Recent final heart-rate reading in a temporal window
+rule RecentTachycardiaRule:
+    intent: "Detect a recent final heart-rate reading above the threshold"
     schedule: "every 5m"
     site: Cardiology
 
@@ -10,6 +10,6 @@ rule SustainedTachycardiaRule:
 
     when hr_readings.latest >= max_hr within 15 minutes:
     then:
-        alert: "Sustained Tachycardia Observed", hr_readings.latest
+        alert: "Recent Tachycardia Observed", hr_readings.latest
         suppress: within 1 hours
 end

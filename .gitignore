@@ -1,0 +1,27 @@
+# Build artifacts
+*.o
+helix
+tests/test_runner
+engine/*.o
+engine/helix
+
+# WebAssembly build artifacts (intermediate)
+*.wasm.map
+
+# Node / Frontend dependencies and build
+web/node_modules/
+web/dist/
+node_modules/
+dist/
+
+# Source of truth markdown file
+SOURCE_OF_TRUTH.md
+
+# Studio isolated build and test outputs
+build/
+web/public/wasm/
+web/test-results/
+web/playwright-report/
+web/*.tsbuildinfo
+__pycache__/
+.toolchains/

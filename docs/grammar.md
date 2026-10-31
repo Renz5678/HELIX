@@ -103,7 +103,7 @@ string_literal    = '"' , { string_char } , '"' ;
    HELIX Grammar (Extended Backus-Naur Form)
    ========================================== *)
 
-program              = { rule_decl } , EOF ;
+program              = rule_decl , { rule_decl } , EOF ;
 
 rule_decl            = "rule" , IDENTIFIER , [ ":" ] ,
                        { rule_element } ,
@@ -137,8 +137,8 @@ let_decl             = "let" , IDENTIFIER , ( ":=" | "=" ) , expression ;
 (* Conditional and Control Flow *)
 when_stmt            = "when" , [ "for" , IDENTIFIER ] , expression ,
                        [ ":" ] , "then" , [ ":" ] ,
-                       { statement_in_branch } ,
-                       [ "otherwise" , [ ":" ] , { statement_in_branch } ] ;
+                       statement_in_branch , { statement_in_branch } ,
+                       [ "otherwise" , [ ":" ] , statement_in_branch , { statement_in_branch } ] ;
 
 statement_in_branch  = let_decl
                      | action_stmt
@@ -149,7 +149,7 @@ action_stmt          = alert_stmt | suppress_stmt ;
 
 alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
 
-suppress_stmt        = "suppress" , [ ":" ] , [ IDENTIFIER | STRING_LITERAL | duration_expr ] ;
+suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)
@@ -198,3 +198,27 @@ primary_expr         = IDENTIFIER
                      | "latest"
                      | "(" , expression , ")" ;
 ```
+
+
+## 5. Studio compatibility and evaluation
+
+The native parser requires at least one rule, at least one statement in each
+present then/otherwise branch, and an operand after suppress. Thus the executable
+productions use `program = rule_decl, {rule_decl}, EOF`, and nonempty branch
+sequences. `suppress within duration_expr` is accepted.
+
+Newlines/indentation are whitespace, not block delimiters. A when consumes following
+let/alert/suppress/when statements greedily; nested whens own their following
+otherwise. There is no independent end token for each when. AST construction uses
+the same parsing functions and preserves this grouping.
+
+The lexer retains the 21 keywords. Boolean values enter through typed tables; true
+and false spellings are identifiers, not literal keywords. Accepted calls, indexes,
+arrows, standalone latest, and when-for remain syntax-valid but are diagnosed as
+unsupported executable expressions during semantic validation. Metadata arguments
+are preserved. Compare docs/evaluation.md for the supported runtime subset.
+
+A bind filter followed by within is normalized to one series query even if the
+recursive expression parser captures within in the filter expression. A condition
+window requires exactly one series reference. Windowing selects recent eligible
+readings; it does not establish sustained abnormal observations.

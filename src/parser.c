@@ -79,6 +79,10 @@ static bool consume_tok(Parser *parser, TokenType type, const char *msg) {
 static void synchronize(Parser *parser) {
     parser->panic_mode = false;
 
+    if (!is_at_end(parser)) {
+        advance_tok(parser);
+    }
+
     while (!is_at_end(parser)) {
         TokenType t = peek_tok(parser).type;
         switch (t) {
@@ -582,7 +586,11 @@ bool parser_parse(Parser *parser) {
             }
         } else {
             error_at_current(parser, "Expected 'rule' declaration. Found '%s'", peek_tok(parser).lexeme);
-            synchronize(parser);
+            advance_tok(parser);
+            while (!is_at_end(parser) && !check_tok(parser, TOKEN_KW_RULE)) {
+                advance_tok(parser);
+            }
+            parser->panic_mode = false;
         }
     }
 

@@ -8,7 +8,7 @@ void diag_init(DiagnosticEngine *engine, const SourceBuffer *source, FILE *out_s
     engine->lexical_errors = 0;
     engine->syntax_errors = 0;
     engine->warnings = 0;
-    engine->out_stream = out_stream ? out_stream : stderr;
+    engine->out_stream = out_stream;
 }
 
 void diag_report(DiagnosticEngine *engine, DiagnosticKind kind, size_t line, size_t column, const char *fmt, ...) {
@@ -27,7 +27,11 @@ void diag_report(DiagnosticEngine *engine, DiagnosticKind kind, size_t line, siz
     }
 
     const char *fname = (engine->source && engine->source->filename) ? engine->source->filename : "<input>";
-    FILE *out = engine->out_stream ? engine->out_stream : stderr;
+    FILE *out = engine->out_stream;
+
+    if (!out) {
+        return;
+    }
 
     fprintf(out, "%s:%zu:%zu: %s: ", fname, line, column, kind_str);
 

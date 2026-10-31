@@ -1,1 +1,409 @@
-# HELIX
+# HELIX Lexical Analyzer and Syntax Validator in C
+
+A complete, modular, handwritten lexical analyzer and syntax validator for **HELIX (Health Event Logic Interchange eXpression)**, a domain-specific programming language for expressing clinical event rules, alerts, and temporal logic.
+
+This project was developed in **ISO C11** using GCC as an undergraduate Computer Science requirement for a *Principles of Programming Languages* course.
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Language Overview & Specification](#2-language-overview--specification)
+3. [Architecture & Module Separation](#3-architecture--module-separation)
+4. [Lexical Constructs & Grammar](#4-lexical-constructs--grammar)
+5. [Prerequisites & Compilation](#5-prerequisites--compilation)
+6. [How to Run (CLI Guide)](#6-how-to-run-cli-guide)
+7. [Error Handling & Diagnostic Output](#7-error-handling--diagnostic-output)
+8. [Automated Testing Suite](#8-automated-testing-suite)
+9. [Project Layout](#9-project-layout)
+10. [Known Limitations & Design Notes](#10-known-limitations--design-notes)
+
+---
+
+## 1. Project Overview
+
+HELIX is a domain-specific language (DSL) intended for authoring declarative clinical event logic, such as monitoring vitals, tracking laboratory trends, triggering inpatient alerts, and managing alert suppression windows.
+
+This system serves as a complete **compiler front-end** (Lexer + Parser):
+- **Lexical Analysis:** Scans raw HELIX source code character-by-character using a Deterministic Finite Automaton (DFA) with maximal-munch token recognition.
+- **Syntax Analysis:** Validates token streams against a formal Context-Free Grammar (CFG) using recursive descent with explicit operator precedence and panic-mode error recovery.
+- **No Parser Generators:** Pure handwritten C11. No Flex, Lex, Bison, or Yacc.
+- **Pure ISO C11:** Zero third-party dependencies, compiling under strict GCC warning flags (`-std=c11 -Wall -Wextra -Wpedantic`).
+
+> **Note on Scope:** This tool performs lexical analysis and syntax validation. In accordance with course specifications, it does **not** evaluate rules at runtime, perform bytecode execution, or interface with external clinical FHIR/EHR networks.
+
+---
+
+## 2. Language Overview & Specification
+
+A HELIX file consists of one or more declarative `rule` blocks. Each rule defines clinical intents, data bindings, variables, evaluation conditions, actions, and suppression criteria:
+
+```text
+rule HighGlucoseAlert:
+    intent: "Detect severe acute hyperglycemia in adult inpatients"
+    site: ICU
+    terminology: LOINC("2339-0")
+    source: EHR -> FHIR_R4
+
+    bind glucose_data = Labs.glucose
+
+    let threshold := 180
+
+    when glucose_data.latest > threshold:
+    then:
+        alert: "High Blood Glucose Detected", "WARNING"
+    otherwise:
+        suppress: within 4 hours
+end
+```
+
+### Key Decisions & Grammar Resolutions
+To resolve discrepancies between informal documentation examples and formal definitions:
+1. **Assignment Operators (`:=` and `=`):** The formal assignment operator is `:=`. For backward compatibility with alternate examples, `=` is also accepted in `let` assignments and bindings.
+2. **21 Core Reserved Keywords:** The formal 21-keyword list is strictly enforced. Words appearing in informal examples (`if`, `conclude`, `log`) are treated as regular identifiers, avoiding ad-hoc keyword bloat.
+3. **Optional Colons:** Colons following declaration headers (`rule Name:`, `intent:`, `when:`, `then:`, `otherwise:`) are optional to support both idiomatic styles.
+4. **Member Navigation on Keywords (`.latest`):** The property access grammar rule (`primary "." member_name`) contextually accepts keywords like `latest` or `source` after `.`, keeping the scanner context-free.
+
+Full formal definitions are available in [docs/grammar.md](docs/grammar.md) and [docs/token_reference.md](docs/token_reference.md).
+
+---
+
+## 3. Architecture & Module Separation
+
+The project follows a clean, decoupled architecture where each module has a single responsibility:
+
+```text
+                  +----------------------------------------+
+                  |               main.c                   |
+                  | (CLI coordinator, argument dispatcher) |
+                  +-------------------+--------------------+
+                                      |
+                                      v
+                         +--------------------------+
+                         |   source.h / source.c    |
+                         | (Source buffer manager)  |
+                         +------------+-------------+
+                                      |
+                                      v
+   +------------------------+   +--------------------------+
+   | keywords.h/keywords.c  |-->|    lexer.h / lexer.c     |
+   | (Reserved word lookup) |   | (DFA character scanner)  |
+   +------------------------+   +-------------+------------+
+                                              |
+                                              v
+                                +--------------------------+
+                                |    token.h / token.c     |
+                                | (Token structures & list)|
+                                +-------------+------------+
+                                              |
+                                              v
+                                +--------------------------+   +--------------------------+
+                                |   parser.h / parser.c    |-->| diagnostic.h/diagnostic.c|
+                                | (Recursive descent engine|   | (Unified error reporter) |
+                                +--------------------------+   +--------------------------+
+```
+
+### Module Responsibilities
+- **`source.h` / `source.c`:** Loads files into a contiguous, null-terminated memory buffer. Provides `source_get_line()` for caret diagnostic printing.
+- **`diagnostic.h` / `diagnostic.c`:** Unified error formatting with visual source code context and column pointer (`^`). Tracks error counts.
+- **`token.h` / `token.c`:** Defines `TokenType` enums, `Token` structures, string descriptions, and the dynamic `TokenList`.
+- **`keywords.h` / `keywords.c`:** Binary search lookup for the 21 formal HELIX reserved words.
+- **`lexer.h` / `lexer.c`:** Deterministic Finite Automaton scanning characters, skipping `#` comments, extracting tokens, and detecting lexical errors.
+- **`parser.h` / `parser.c`:** Recursive descent parser enforcing the grammar, evaluating boolean precedence (`not > and > or`), and recovering via panic-mode synchronization.
+- **`main.c`:** CLI entry point, argument parser, and summary reporting.
+
+Detailed architectural specifications can be found in [docs/architecture.md](docs/architecture.md).
+
+---
+
+## 4. Lexical Constructs & Grammar
+
+### Formal Reserved Keywords (21 Words)
+```text
+rule        intent      bind        site        source
+terminology schedule    when        for         let
+latest      where       and         or          not
+within      then        alert       suppress    otherwise
+end
+```
+
+### Literals
+- **Integer Literals:** Decimal digits (`180`, `42`, `0`).
+- **Floating-Point Literals:** Decimal with fraction (`37.5`, `98.6`, `0.5`).
+- **String Literals:** Double-quoted strings supporting escape characters (`"ICU"`, `"Detect acute hypoglycemia"`).
+
+### Operators & Delimiters
+- **Assignment:** `:=`, `=`
+- **Comparison:** `==`, `!=`, `<`, `<=`, `>`, `>=`
+- **Mapping:** `->`
+- **Delimiters:** `:`, `.`, `,`, `(`, `)`, `[`, `]`
+
+### Expression Precedence Hierarchy
+Precedence is strictly enforced through recursive descent:
+1. `parse_expression()` / `parse_or_expr()`: Disjunction (`or`)
+2. `parse_and_expr()`: Conjunction (`and`)
+3. `parse_unary_expr()`: Negation (`not`)
+4. `parse_comparison_expr()`: Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`)
+5. `parse_postfix_expr()`: Navigation (`.field`, `->target`, `[index]`, `(args)`)
+6. `parse_primary_expr()`: Identifiers, literals, and grouped sub-expressions `( ... )`
+
+---
+
+## 5. Prerequisites & Compilation
+
+### Requirements
+- **OS:** Linux (e.g. Fedora, Ubuntu, Debian) or POSIX-compliant environment
+- **Compiler:** GCC supporting ISO C11
+- **Build Tool:** GNU Make
+
+### Compilation Steps
+Clone or open the project directory and build using the provided `Makefile`:
+
+```bash
+make
+```
+
+This compiles all modules with strict compiler flags:
+```bash
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/source.c -o src/source.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/diagnostic.c -o src/diagnostic.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/token.c -o src/token.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/keywords.c -o src/keywords.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/lexer.c -o src/lexer.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/parser.c -o src/parser.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -c src/main.c -o src/main.o
+gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude -O2 -o helix ...
+```
+
+To clean all build artifacts and object files:
+```bash
+make clean
+```
+
+---
+
+## 6. How to Run (CLI Guide)
+
+The binary is named `helix`.
+
+```bash
+./helix [options] <source-file.helix>
+```
+
+### Command-Line Options
+
+| Option | Description |
+| :--- | :--- |
+| `--check` | **(Default)** Performs complete lexical analysis and syntax validation, printing summary results and any detected diagnostics. |
+| `--tokens` | Performs lexical analysis and displays the full token stream in a formatted table. |
+| `--help`, `-h` | Displays usage and help information. |
+
+---
+
+### Execution Examples
+
+#### 1. Validate a Valid HELIX Program
+```bash
+./helix examples/basic_rule.helix
+```
+**Output:**
+```text
+HELIX Lexical and Syntax Analyzer
+---------------------------------
+
+File: examples/basic_rule.helix
+
+Lexical Analysis: PASSED
+Syntax Analysis:  PASSED
+
+Tokens Recognized: 57
+Lexical Errors:    0
+Syntax Errors:     0
+
+Result: Valid HELIX program.
+```
+
+#### 2. Display the Recognized Tokens Table
+```bash
+./helix --tokens examples/basic_rule.helix
+```
+**Output:**
+```text
+Tokens Recognized in 'examples/basic_rule.helix':
+Line  | Column | Token Type             | Lexeme
+------+--------+------------------------+-----------------------------------
+2     | 1      | TOKEN_KW_RULE          | rule
+2     | 6      | TOKEN_IDENTIFIER       | HighGlucoseAlert
+2     | 22     | TOKEN_COLON            | :
+3     | 5      | TOKEN_KW_INTENT        | intent
+3     | 11     | TOKEN_COLON            | :
+3     | 13     | TOKEN_STRING_LIT       | "Detect severe acute hyperglycemia in adult inpatients"
+4     | 5      | TOKEN_KW_SITE          | site
+4     | 9      | TOKEN_COLON            | :
+4     | 11     | TOKEN_IDENTIFIER       | ICU
+5     | 5      | TOKEN_KW_TERMINOLOGY   | terminology
+5     | 16     | TOKEN_COLON            | :
+5     | 18     | TOKEN_IDENTIFIER       | LOINC
+5     | 23     | TOKEN_LPAREN           | (
+5     | 24     | TOKEN_STRING_LIT       | "2339-0"
+5     | 32     | TOKEN_RPAREN           | )
+...
+Total tokens: 57
+```
+
+#### 3. Validate Other Sample Rules
+```bash
+# Validate temporal rule with duration expressions
+./helix examples/temporal_rule.helix
+
+# Validate multi-parameter alert rule with complex boolean expressions
+./helix examples/alert_rule.helix
+```
+
+---
+
+## 7. Error Handling & Diagnostic Output
+
+The system produces standard Clang/GCC-style diagnostic messages pointing directly to the offending line and column.
+
+### Syntax Error Example (Missing Expression)
+Testing against `tests/invalid/syn_missing_expression.helix`:
+```bash
+./helix tests/invalid/syn_missing_expression.helix
+```
+**Diagnostic Output:**
+```text
+tests/invalid/syn_missing_expression.helix:4:5: Syntax Error: Expected expression
+        then:
+        ^
+HELIX Lexical and Syntax Analyzer
+---------------------------------
+
+File: tests/invalid/syn_missing_expression.helix
+
+Lexical Analysis: PASSED
+Syntax Analysis:  FAILED
+
+Tokens Recognized: 15
+Lexical Errors:    0
+Syntax Errors:     1
+
+Result: Validation failed with errors.
+```
+
+### Lexical Error Example (Illegal Characters)
+Testing against `tests/invalid/lex_illegal_char.helix`:
+```bash
+./helix tests/invalid/lex_illegal_char.helix
+```
+**Diagnostic Output:**
+```text
+tests/invalid/lex_illegal_char.helix:3:20: Lexical Error: Unrecognized character '@' (0x40)
+        let rate := 50 @ 10
+                       ^
+tests/invalid/lex_illegal_char.helix:4:17: Lexical Error: Unrecognized character '$' (0x24)
+        let cost := $100
+                    ^
+```
+
+### Exit Codes
+- `0` (`EXIT_SUCCESS`): Input is completely free of lexical and syntax errors.
+- `1` (`EXIT_FAILURE`): One or more lexical or syntax errors were identified, or an invalid CLI argument / file path was provided.
+
+---
+
+## 8. Automated Testing Suite
+
+An automated test suite is integrated into the build system. It executes unit tests on individual modules as well as end-to-end integration tests over both valid and invalid fixture files.
+
+### Running the Test Suite
+```bash
+make test
+```
+
+### Test Suite Output
+```text
+========================================
+ HELIX Test Suite (Automated Verification)
+========================================
+
+Running test: Unit: Keywords Lookup                        [PASS]
+Running test: Unit: Lexer Basic Scanning                   [PASS]
+Running test: Unit: Lexer Operators and Locations          [PASS]
+Running test: Unit: Lexer Error Detection                  [PASS]
+Running test: Unit: Parser Minimal Rule                    [PASS]
+Running test: Unit: Parser Boolean Precedence              [PASS]
+Running test: Fixture: examples/basic_rule.helix           [PASS]
+Running test: Fixture: examples/temporal_rule.helix        [PASS]
+Running test: Fixture: examples/alert_rule.helix           [PASS]
+Running test: Fixture: tests/parser/test_minimal.helix     [PASS]
+Running test: Fixture: tests/parser/test_multiple_rules.helix[PASS]
+Running test: Negative: Unterminated string                [PASS]
+Running test: Negative: Illegal characters (@, $)          [PASS]
+Running test: Negative: Malformed numbers                  [PASS]
+Running test: Negative: Missing rule name                  [PASS]
+Running test: Negative: Missing rule end                   [PASS]
+Running test: Negative: Missing expression                 [PASS]
+
+========================================
+ Results: 17/17 tests passed (0 failed)
+========================================
+```
+
+---
+
+## 9. Project Layout
+
+```text
+helix-analyzer/
+├── include/
+│   ├── diagnostic.h         # Centralized diagnostic engine & error counters
+│   ├── keywords.h           # 21-keyword lookup & classification table
+│   ├── lexer.h              # DFA-based lexical analyzer interface
+│   ├── parser.h             # Recursive descent syntax validator interface
+│   ├── source.h             # Source file buffer loading and line slicing
+│   └── token.h              # Token data structures, type enums, and list utilities
+│
+├── src/
+│   ├── diagnostic.c         # Diagnostic formatting with source line snippets & carets
+│   ├── keywords.c           # Binary search keyword matcher
+│   ├── lexer.c              # Scanner with maximal munch and error detection
+│   ├── main.c               # Command-line driver and summary generator
+│   ├── parser.c             # Recursive descent parser with panic recovery
+│   ├── source.c             # Buffer ownership and memory cleanup
+│   └── token.c              # Token allocation, lifecycle, and type printing
+│
+├── tests/
+│   ├── invalid/             # Negative test cases (lexical & syntax errors)
+│   │   ├── lex_bad_number.helix
+│   │   ├── lex_illegal_char.helix
+│   │   ├── lex_unterminated_string.helix
+│   │   ├── syn_missing_end.helix
+│   │   ├── syn_missing_expression.helix
+│   │   └── syn_missing_rule_name.helix
+│   ├── parser/              # Positive test cases
+│   │   ├── test_minimal.helix
+│   │   └── test_multiple_rules.helix
+│   └── test_runner.c        # Automated unit and fixture test harness
+│
+├── examples/
+│   ├── alert_rule.helix     # Multi-vital sepsis early warning rule
+│   ├── basic_rule.helix     # Hyperglycemia rule with intent, bindings, and alerts
+│   └── temporal_rule.helix  # Tachycardia rule with temporal 'within' qualifiers
+│
+├── docs/
+│   ├── architecture.md      # In-depth architectural and module documentation
+│   ├── grammar.md           # Formal EBNF grammar and ambiguity resolution notes
+│   └── token_reference.md   # Complete token catalog, lexemes, and patterns
+│
+├── Makefile                 # Build system targets (all, test, clean)
+└── README.md                # Project documentation and user guide
+```
+
+---
+
+## 10. Known Limitations & Design Notes
+
+1. **Panic-Mode Recovery:** The parser synchronizes upon statement boundary keywords (`rule`, `end`, `when`, `then`, `let`, `bind`). In files with severely corrupted structure, multiple errors may collapse to avoid error cascading.
+2. **Clinical DSL Boundary:** The validator checks lexical and grammatical syntax only. Semantic concerns (e.g., verifying that a LOINC code exists in a database or that variables are declared before use) are outside the scope of lexical analysis and syntax validation.

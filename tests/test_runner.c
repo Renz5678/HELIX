@@ -84,7 +84,7 @@ static bool test_lexer_basic_tokens(void) {
 
 static bool test_lexer_operators_and_positions(void) {
     SourceBuffer src;
-    source_from_string("ops", "== != <= >= -> = < >", &src);
+    source_from_string("ops", "== != <= >= -> := = < >", &src);
 
     DiagnosticEngine diag;
     diag_init(&diag, &src, NULL);
@@ -102,9 +102,10 @@ static bool test_lexer_operators_and_positions(void) {
     TEST_ASSERT(tokens.items[2].type == TOKEN_LTE, "<=");
     TEST_ASSERT(tokens.items[3].type == TOKEN_GTE, ">=");
     TEST_ASSERT(tokens.items[4].type == TOKEN_ARROW, "->");
-    TEST_ASSERT(tokens.items[5].type == TOKEN_EQUAL, "=");
-    TEST_ASSERT(tokens.items[6].type == TOKEN_LT, "<");
-    TEST_ASSERT(tokens.items[7].type == TOKEN_GT, ">");
+    TEST_ASSERT(tokens.items[5].type == TOKEN_ASSIGN, ":=");
+    TEST_ASSERT(tokens.items[6].type == TOKEN_EQUAL, "=");
+    TEST_ASSERT(tokens.items[7].type == TOKEN_LT, "<");
+    TEST_ASSERT(tokens.items[8].type == TOKEN_GT, ">");
 
     token_list_free(&tokens);
     source_free(&src);

@@ -1,0 +1,166 @@
+/* ============================================================
+   HELIX Clinical IDE — design system (Tailwind v4 + custom layer)
+   Dark clinical / neon teal-cyan, Inter + JetBrains Mono
+   ============================================================ */
+@import "tailwindcss";
+
+@theme {
+  /* surfaces */
+  --color-helix-bg: #0b0f19;
+  --color-helix-deep: #05070b;
+  --color-helix-surface: #0d1322;
+  --color-helix-surface2: #111a2e;
+  /* brand */
+  --color-helix-cyan: #00f2fe;
+  --color-helix-blue: #4facfe;
+  --color-helix-mint: #00ffcc;
+  /* text */
+  --color-helix-text: #f3f4f6;
+  --color-helix-muted: #9ca3af;
+  --color-helix-dim: #6b7280;
+  /* status */
+  --color-helix-err: #f87171;
+  --color-helix-warn: #fbbf24;
+  --color-helix-ok: #34d399;
+  /* syntax */
+  --color-tok-keyword: #00f2fe;
+  --color-tok-ident: #7dd3fc;
+  --color-tok-clinical: #34d399;
+  --color-tok-operator: #e879f9;
+  --color-tok-error: #f87171;
+  /* fonts */
+  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    background: var(--color-helix-bg);
+    color: var(--color-helix-text);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* faint clinical grid + vignette */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      radial-gradient(ellipse 60% 40% at 15% -10%, rgba(0,242,254,0.06), transparent),
+      radial-gradient(ellipse 50% 40% at 95% 110%, rgba(0,255,204,0.04), transparent),
+      linear-gradient(rgba(0,242,254,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,242,254,0.025) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 42px 42px, 42px 42px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  ::selection { background: rgba(0,242,254,0.25); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #1c2740; border-radius: 6px; border: 2px solid var(--color-helix-bg); }
+  ::-webkit-scrollbar-thumb:hover { background: #2a3a5e; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  :focus-visible { outline: 2px solid var(--color-helix-cyan); outline-offset: 1px; }
+}
+
+/* ------------------------------------------------------------
+   Shared component styles (plain CSS on purpose: the editor
+   needs pixel-exact metrics that utility classes would fight)
+   ------------------------------------------------------------ */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  font-family: var(--font-ui); font-size: 12.5px; font-weight: 600; letter-spacing: 0.3px;
+  border: 1px solid rgba(0,242,254,0.35);
+  background: var(--color-helix-surface); color: var(--color-helix-text);
+  transition: background .15s, box-shadow .15s, transform .05s, border-color .15s;
+  white-space: nowrap;
+}
+.btn:hover { background: rgba(0,242,254,0.1); border-color: var(--color-helix-cyan); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.btn svg { width: 14px; height: 14px; }
+.btn-primary {
+  background: linear-gradient(135deg, #00f2fe, #4facfe); color: #04121c; border: none;
+  box-shadow: 0 0 14px rgba(0,242,254,0.35);
+}
+.btn-primary:hover { box-shadow: 0 0 22px rgba(0,242,254,0.55); filter: brightness(1.1); background: linear-gradient(135deg, #00f2fe, #4facfe); }
+.btn-danger:hover { border-color: var(--color-helix-err); background: rgba(248,113,113,0.12); }
+.btn-icon { padding: 5px; width: 28px; height: 28px; justify-content: center; border-radius: 6px; }
+.btn-icon svg { width: 13px; height: 13px; }
+
+.field {
+  font-family: var(--font-mono); font-size: 12px; padding: 6px 9px;
+  background: var(--color-helix-deep); color: var(--color-helix-text);
+  border: 1px solid rgba(0,242,254,0.15); border-radius: 6px; outline: none;
+}
+.field:focus { border-color: var(--color-helix-cyan); box-shadow: 0 0 0 2px rgba(0,242,254,0.12); }
+
+/* ECG header pulse */
+.ecg-line { stroke: var(--color-helix-cyan); stroke-width: 1.6; fill: none; filter: drop-shadow(0 0 4px rgba(0,242,254,0.8)); }
+.ecg-dot { fill: #fff; filter: drop-shadow(0 0 5px #fff); }
+.ecg-anim { stroke-dasharray: 320; stroke-dashoffset: 320; animation: ecgDraw 2.6s linear infinite; }
+@keyframes ecgDraw { to { stroke-dashoffset: -320; } }
+
+/* Editor stack: highlight layer + transparent textarea share metrics */
+.editor-scroll { position: relative; flex: 1; overflow: hidden; }
+.hl-layer, .ta {
+  font-family: var(--font-mono);
+  font-size: var(--editor-fs, 13.5px);
+  line-height: var(--editor-lh, 22px);
+  padding: 12px 16px;
+  white-space: pre; tab-size: 4; word-break: normal; overflow-wrap: normal;
+  letter-spacing: 0; margin: 0; border: 0;
+}
+.hl-layer {
+  position: absolute; inset: 0; overflow: auto; pointer-events: none;
+  color: var(--color-helix-text); scrollbar-width: none;
+}
+.hl-layer::-webkit-scrollbar { display: none; }
+.ta {
+  position: absolute; inset: 0; width: 100%; height: 100%; resize: none; outline: none;
+  background: transparent; color: transparent; caret-color: var(--color-helix-cyan);
+  overflow: auto;
+}
+.ta::placeholder { color: #3d4a63; }
+
+.k-keyword { color: var(--color-tok-keyword); font-weight: 600; }
+.k-identifier { color: var(--color-tok-ident); }
+.k-string, .k-number { color: var(--color-tok-clinical); }
+.k-comment { color: #4b5a78; font-style: italic; }
+.k-operator { color: var(--color-tok-operator); }
+.k-delimiter { color: var(--color-tok-operator); opacity: .8; }
+.k-error { color: var(--color-tok-error); text-decoration: wavy underline rgba(248,113,113,0.6); }
+.find-hit { background: rgba(251,191,36,0.22); border-radius: 2px; }
+.find-hit.cur { background: rgba(251,191,36,0.5); }
+
+/* token kind colors (token table + badges) */
+.kind-keyword { color: var(--color-tok-keyword); }
+.kind-identifier { color: var(--color-tok-ident); }
+.kind-number, .kind-string, .kind-clinical { color: var(--color-tok-clinical); }
+.kind-operator, .kind-delimiter { color: var(--color-tok-operator); }
+.kind-error { color: var(--color-tok-error); font-weight: 700; }
+.kind-comment, .kind-whitespace { color: var(--color-helix-dim); }
+.kind-eof { color: var(--color-helix-dim); font-style: italic; }
+
+/* AST tree */
+.ast-children { margin-left: 18px; border-left: 1px dashed rgba(0,242,254,0.15); padding-left: 8px; }
+.n-RuleNode .ast-label { color: var(--color-tok-keyword); }
+.n-IntentNode .ast-label { color: var(--color-helix-blue); }
+.n-SiteNode .ast-label { color: var(--color-tok-ident); }
+.n-TerminologyNode .ast-label { color: var(--color-helix-ok); }
+.n-SourceBindingNode .ast-label { color: var(--color-tok-operator); }
+.n-LetBindingNode .ast-label { color: var(--color-tok-clinical); }
+.n-ConditionActionBlock .ast-label { color: var(--color-helix-warn); }
+.n-AlertAction .ast-label { color: var(--color-helix-err); }
+.n-SuppressAction .ast-label { color: var(--color-helix-dim); }
+
+/* status dot animations */
+@keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+.pulse { animation: pulseDot 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

@@ -1,0 +1,20 @@
+# Build artifacts
+*.o
+/helix
+/helix.exe
+/tests/test_runner
+/tests/test_runner.exe
+/gui/helix-server
+/gui/helix-server.exe
+
+# Front-end (Node/Vite)
+/gui/web/node_modules/
+/gui/dist/
+
+# Runtime workspace (user rules created in the IDE)
+/workspace/
+
+# Editor/OS noise
+.vscode/
+*.swp
+Thumbs.db

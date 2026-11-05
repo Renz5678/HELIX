@@ -89,6 +89,7 @@ string_literal    = '"' , { string_char } , '"' ;
 - **Multi-character Operators:**
   `:=` (assignment), `==` (equality), `!=` (inequality), `>=` (greater or equal), `<=` (less or equal), `->` (arrow/mapping).
 - **Single-character Operators & Delimiters:**
+  `+` (addition), `-` (subtraction), `*` (multiplication), `/` (division),
   `=` (equal), `>` (greater than), `<` (less than),
   `:` (colon), `.` (dot), `,` (comma),
   `(` (left parenthesis), `)` (right parenthesis),

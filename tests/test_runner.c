@@ -288,6 +288,10 @@ static bool is_expected_single(TokenType got, int c) {
         case ')':  return got == TOKEN_RPAREN;
         case '[':  return got == TOKEN_LBRACKET;
         case ']':  return got == TOKEN_RBRACKET;
+        case '+':  return got == TOKEN_PLUS;
+        case '-':  return got == TOKEN_MINUS;
+        case '*':  return got == TOKEN_STAR;
+        case '/':  return got == TOKEN_SLASH;
         case '=':  return got == TOKEN_EQUAL;
         case '<':  return got == TOKEN_LT;
         case '>':  return got == TOKEN_GT;
@@ -398,6 +402,202 @@ static bool test_fixture_syn_missing_expression(void) {
     return test_file_validation("tests/invalid/syn_missing_expression.helix", false);
 }
 
+/* --- HELIX-38 Unit Tests: Arithmetic Operators --- */
+
+static bool check_tokens(const char *input, size_t expected_count, const TokenType *expected_types, const char **expected_lexemes) {
+    SourceBuffer src;
+    source_from_string("h38_test", input, &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+
+    TokenList tokens;
+    bool ok = lexer_tokenize_all(&lexer, &tokens);
+
+    TEST_ASSERT(ok, "lexer tokenized cleanly without errors");
+    TEST_ASSERT(diag.lexical_errors == 0, "zero lexical errors");
+    TEST_ASSERT(tokens.count == expected_count, "token count matches expected");
+
+    for (size_t i = 0; i < expected_count; i++) {
+        TEST_ASSERT(tokens.items[i].type == expected_types[i], "token type matches");
+        if (expected_lexemes && expected_lexemes[i]) {
+            TEST_ASSERT(strcmp(tokens.items[i].lexeme, expected_lexemes[i]) == 0, "token lexeme matches");
+        }
+    }
+
+    token_list_free(&tokens);
+    diag_free(&diag);
+    source_free(&src);
+    return true;
+}
+
+static bool test_helix38_basic_arithmetic(void) {
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_PLUS, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "1", "+", "2", "" };
+        TEST_ASSERT(check_tokens("1 + 2", 4, types, lexemes), "1 + 2 recognized");
+    }
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_MINUS, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "5", "-", "3", "" };
+        TEST_ASSERT(check_tokens("5 - 3", 4, types, lexemes), "5 - 3 recognized");
+    }
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_STAR, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "4", "*", "2", "" };
+        TEST_ASSERT(check_tokens("4 * 2", 4, types, lexemes), "4 * 2 recognized");
+    }
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_SLASH, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "8", "/", "2", "" };
+        TEST_ASSERT(check_tokens("8 / 2", 4, types, lexemes), "8 / 2 recognized");
+    }
+    return true;
+}
+
+static bool test_helix38_spacing_and_expressions(void) {
+    /* A+B without spaces */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "+", "B", "" };
+        TEST_ASSERT(check_tokens("A+B", 4, types, lexemes), "A+B without spaces");
+    }
+    /* A + B with spaces */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "+", "B", "" };
+        TEST_ASSERT(check_tokens("A + B", 4, types, lexemes), "A + B with spaces");
+    }
+    /* (A + B) * C */
+    {
+        TokenType types[] = { TOKEN_LPAREN, TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_RPAREN, TOKEN_STAR, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "(", "A", "+", "B", ")", "*", "C", "" };
+        TEST_ASSERT(check_tokens("(A + B) * C", 8, types, lexemes), "(A + B) * C");
+    }
+    /* A-5 */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_MINUS, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "A", "-", "5", "" };
+        TEST_ASSERT(check_tokens("A-5", 4, types, lexemes), "A-5 recognized");
+    }
+    /* A*-B */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_STAR, TOKEN_MINUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "*", "-", "B", "" };
+        TEST_ASSERT(check_tokens("A*-B", 5, types, lexemes), "A*-B recognized");
+    }
+    /* A / B + C * D */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_SLASH, TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_STAR, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "/", "B", "+", "C", "*", "D", "" };
+        TEST_ASSERT(check_tokens("A / B + C * D", 8, types, lexemes), "A / B + C * D recognized");
+    }
+    return true;
+}
+
+static bool test_helix38_jira_reproduction(void) {
+    /* Jira Example 1: let severe_threshold = 250 + 3 */
+    {
+        TokenType types[] = {
+            TOKEN_KW_LET, TOKEN_IDENTIFIER, TOKEN_EQUAL, TOKEN_INT_LIT, TOKEN_PLUS, TOKEN_INT_LIT, TOKEN_EOF
+        };
+        const char *lexemes[] = {
+            "let", "severe_threshold", "=", "250", "+", "3", ""
+        };
+        TEST_ASSERT(check_tokens("let severe_threshold = 250 + 3", 7, types, lexemes),
+                    "Jira example 1: let severe_threshold = 250 + 3");
+    }
+    /* Jira Example 2: let A := (B + 3) * G / 24 */
+    {
+        TokenType types[] = {
+            TOKEN_KW_LET, TOKEN_IDENTIFIER, TOKEN_ASSIGN, TOKEN_LPAREN, TOKEN_IDENTIFIER, TOKEN_PLUS,
+            TOKEN_INT_LIT, TOKEN_RPAREN, TOKEN_STAR, TOKEN_IDENTIFIER, TOKEN_SLASH, TOKEN_INT_LIT, TOKEN_EOF
+        };
+        const char *lexemes[] = {
+            "let", "A", ":=", "(", "B", "+", "3", ")", "*", "G", "/", "24", ""
+        };
+        TEST_ASSERT(check_tokens("let A := (B + 3) * G / 24", 13, types, lexemes),
+                    "Jira example 2: let A := (B + 3) * G / 24");
+    }
+    return true;
+}
+
+static bool test_helix38_edge_cases(void) {
+    /* Existing assignment operators preserved */
+    {
+        TokenType types1[] = { TOKEN_IDENTIFIER, TOKEN_EQUAL, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes1[] = { "A", "=", "10", "" };
+        TEST_ASSERT(check_tokens("A = 10", 4, types1, lexemes1), "A = 10 preserved");
+
+        TokenType types2[] = { TOKEN_IDENTIFIER, TOKEN_ASSIGN, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes2[] = { "A", ":=", "10", "" };
+        TEST_ASSERT(check_tokens("A := 10", 4, types2, lexemes2), "A := 10 preserved");
+    }
+    /* Disambiguation: -> vs - */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_ARROW, TOKEN_IDENTIFIER, TOKEN_MINUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "a", "->", "b", "-", "c", "" };
+        TEST_ASSERT(check_tokens("a -> b - c", 6, types, lexemes), "arrow vs minus disambiguation");
+    }
+    /* Consecutive operators: + - * / -- ++ // / * * / */
+    {
+        TokenType types[] = {
+            TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH,
+            TOKEN_MINUS, TOKEN_MINUS,
+            TOKEN_PLUS, TOKEN_PLUS,
+            TOKEN_SLASH, TOKEN_SLASH,
+            TOKEN_SLASH, TOKEN_STAR,
+            TOKEN_STAR, TOKEN_SLASH,
+            TOKEN_EOF
+        };
+        TEST_ASSERT(check_tokens("+-*/ -- ++ // /* */", 15, types, NULL), "consecutive operators");
+    }
+    /* Slash and comments */
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_SLASH, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "8", "/", "2", "" };
+        TEST_ASSERT(check_tokens("8 / 2 # comment with + - * /", 4, types, lexemes), "slash before comment");
+    }
+    /* Operators at EOF boundary */
+    {
+        TokenType t_plus[] = { TOKEN_INT_LIT, TOKEN_PLUS, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("1 +", 3, t_plus, NULL), "plus at EOF");
+
+        TokenType t_minus[] = { TOKEN_INT_LIT, TOKEN_MINUS, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("5 -", 3, t_minus, NULL), "minus at EOF");
+
+        TokenType t_star[] = { TOKEN_INT_LIT, TOKEN_STAR, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("4 *", 3, t_star, NULL), "star at EOF");
+
+        TokenType t_slash[] = { TOKEN_INT_LIT, TOKEN_SLASH, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("8 /", 3, t_slash, NULL), "slash at EOF");
+    }
+    /* Negative test: invalid characters still error out */
+    {
+        SourceBuffer src;
+        source_from_string("bad_ops", "let x := 10 @ 5 $ 2 ! 3", &src);
+
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+
+        TokenList tokens;
+        bool ok = lexer_tokenize_all(&lexer, &tokens);
+        TEST_ASSERT(!ok, "errors reported for invalid characters");
+        TEST_ASSERT(diag.lexical_errors >= 3, "at least 3 lexical errors for @, $, !");
+
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+    return true;
+}
+
 int main(void) {
     printf("========================================\n");
     printf(" HELIX Test Suite (Automated Verification)\n");
@@ -414,6 +614,10 @@ int main(void) {
     run_test("Unit: Parser Diagnostic Content", test_diag_syntax_message_content);
     run_test("Unit: CRLF Position Tracking", test_crlf_position_tracking);
     run_test("Unit: Exhaustive ASCII Sweep", test_exhaustive_single_char_sweep);
+    run_test("HELIX-38: Basic Arithmetic Operators", test_helix38_basic_arithmetic);
+    run_test("HELIX-38: Spacing and Expressions", test_helix38_spacing_and_expressions);
+    run_test("HELIX-38: Jira Reproduction Snippets", test_helix38_jira_reproduction);
+    run_test("HELIX-38: Edge Cases and Invariants", test_helix38_edge_cases);
 
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);

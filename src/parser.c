@@ -1291,6 +1291,8 @@ bool parser_parse(Parser *parser) {
     if (!parser)
         return false;
 
+    parser->depth = 0;
+
     if (is_at_end(parser)) {
         error_at_current(parser, "Empty program: expected at least one rule declaration");
         return false;

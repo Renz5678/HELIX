@@ -266,6 +266,243 @@ static bool test_parser_invalid_incorrect_nesting(void) {
         "end when\n", false);
 }
 
+/* --- HELIX-12 Unit Tests: Nesting Depth Protection --- */
+
+static bool test_helix12_normal_expression(void) {
+    return test_string_validation(
+        "rule NormalExpr:\n"
+        "    let x := (1)\n"
+        "    when not (x > 10 and (x < 20 or (x == 15))) then\n"
+        "        alert: \"OK\"\n"
+        "    end when\n"
+        "end rule\n", true);
+}
+
+static bool test_helix12_parentheses_limits(void) {
+    /* Below limit: 34 nested parens */
+    char *buf34 = (char *)malloc(34 * 2 + 64);
+    TEST_ASSERT(buf34 != NULL, "allocation succeeded");
+    char *p = buf34;
+    p += sprintf(p, "rule L:\n    let x := ");
+    for (int i = 0; i < 34; i++) *p++ = '(';
+    *p++ = '1';
+    for (int i = 0; i < 34; i++) *p++ = ')';
+    sprintf(p, "\nend rule\n");
+    bool ok34 = test_string_validation(buf34, true);
+    free(buf34);
+    TEST_ASSERT(ok34, "34 nested parentheses (below limit) succeeds");
+
+    /* Exactly at limit: 35 nested parens */
+    char *buf35 = (char *)malloc(35 * 2 + 64);
+    TEST_ASSERT(buf35 != NULL, "allocation succeeded");
+    p = buf35;
+    p += sprintf(p, "rule L:\n    let x := ");
+    for (int i = 0; i < 35; i++) *p++ = '(';
+    *p++ = '1';
+    for (int i = 0; i < 35; i++) *p++ = ')';
+    sprintf(p, "\nend rule\n");
+    bool ok35 = test_string_validation(buf35, true);
+    free(buf35);
+    TEST_ASSERT(ok35, "35 nested parentheses (at limit) succeeds");
+
+    /* Exceeding limit: 36 nested parens */
+    char *buf36 = (char *)malloc(36 * 2 + 64);
+    TEST_ASSERT(buf36 != NULL, "allocation succeeded");
+    p = buf36;
+    p += sprintf(p, "rule L:\n    let x := ");
+    for (int i = 0; i < 36; i++) *p++ = '(';
+    *p++ = '1';
+    for (int i = 0; i < 36; i++) *p++ = ')';
+    sprintf(p, "\nend rule\n");
+    bool ok36 = test_string_validation(buf36, false);
+    free(buf36);
+    TEST_ASSERT(ok36, "36 nested parentheses (exceeding limit) rejected with syntax error");
+
+    return true;
+}
+
+static bool test_helix12_deep_30000_parentheses(void) {
+    size_t n = 30000;
+    size_t sz = n * 2 + 128;
+    char *buf = (char *)malloc(sz);
+    TEST_ASSERT(buf != NULL, "allocation succeeded");
+
+    char *p = buf;
+    p += sprintf(p, "rule Deep:\n    let x := ");
+    memset(p, '(', n);
+    p += n;
+    *p++ = '1';
+    memset(p, ')', n);
+    p += n;
+    sprintf(p, "\nend rule\n");
+
+    SourceBuffer src;
+    source_from_string("deep", buf, &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+    TokenList tokens;
+    bool lex_ok = lexer_tokenize_all(&lexer, &tokens);
+    TEST_ASSERT(lex_ok, "lexing 30,000 parentheses succeeds");
+
+    Parser parser;
+    parser_init(&parser, &tokens, &diag);
+    bool parsed = parser_parse(&parser);
+
+    TEST_ASSERT(!parsed, "30,000 parentheses rejected without crashing");
+    TEST_ASSERT(diag.syntax_errors >= 1, "syntax error recorded");
+    TEST_ASSERT(parser.depth == 0, "parser depth restored to 0");
+
+    const DiagnosticEntry *e = diag_get_entry(&diag, 0);
+    TEST_ASSERT(e != NULL && strstr(e->message, "nesting limit exceeded") != NULL,
+                "diagnostic names nesting limit");
+
+    token_list_free(&tokens);
+    diag_free(&diag);
+    source_free(&src);
+    free(buf);
+    return true;
+}
+
+static bool test_helix12_repeated_not(void) {
+    /* Below/at limit: 246 nots */
+    size_t sz = 250 * 4 + 64;
+    char *buf246 = (char *)malloc(sz);
+    TEST_ASSERT(buf246 != NULL, "allocation succeeded");
+    char *p = buf246;
+    p += sprintf(p, "rule NotAtLimit:\n    let x := ");
+    for (int i = 0; i < 246; i++) {
+        memcpy(p, "not ", 4);
+        p += 4;
+    }
+    sprintf(p, "1\nend rule\n");
+    bool ok246 = test_string_validation(buf246, true);
+    free(buf246);
+    TEST_ASSERT(ok246, "246 not operators (at limit) succeeds");
+
+    /* Exceeding limit: 247 nots */
+    char *buf247 = (char *)malloc(sz);
+    TEST_ASSERT(buf247 != NULL, "allocation succeeded");
+    p = buf247;
+    p += sprintf(p, "rule NotOverLimit:\n    let x := ");
+    for (int i = 0; i < 247; i++) {
+        memcpy(p, "not ", 4);
+        p += 4;
+    }
+    sprintf(p, "1\nend rule\n");
+    bool ok247 = test_string_validation(buf247, false);
+    free(buf247);
+    TEST_ASSERT(ok247, "247 not operators (exceeding limit) rejected");
+
+    /* Deeply exceeding: 5000 nots */
+    size_t sz5000 = 5000 * 4 + 64;
+    char *buf5000 = (char *)malloc(sz5000);
+    TEST_ASSERT(buf5000 != NULL, "allocation succeeded");
+    p = buf5000;
+    p += sprintf(p, "rule Not5000:\n    let x := ");
+    for (int i = 0; i < 5000; i++) {
+        memcpy(p, "not ", 4);
+        p += 4;
+    }
+    sprintf(p, "1\nend rule\n");
+    bool ok5000 = test_string_validation(buf5000, false);
+    free(buf5000);
+    TEST_ASSERT(ok5000, "5000 not operators rejected safely without stack overflow");
+
+    return true;
+}
+
+static bool test_helix12_nested_branches(void) {
+    /* Below/at limit: 122 nested whens */
+    size_t sz = 125 * 30 + 128;
+    char *buf122 = (char *)malloc(sz);
+    TEST_ASSERT(buf122 != NULL, "allocation succeeded");
+    char *p = buf122;
+    p += sprintf(p, "rule When122:\n");
+    for (int i = 0; i < 122; i++) {
+        p += sprintf(p, "when 1 > 0 then\n");
+    }
+    p += sprintf(p, "alert: \"OK\"\n");
+    for (int i = 0; i < 122; i++) {
+        p += sprintf(p, "end when\n");
+    }
+    sprintf(p, "end rule\n");
+    bool ok122 = test_string_validation(buf122, true);
+    free(buf122);
+    TEST_ASSERT(ok122, "122 nested when branches (at limit) succeeds");
+
+    /* Exceeding limit: 123 nested whens */
+    char *buf123 = (char *)malloc(sz);
+    TEST_ASSERT(buf123 != NULL, "allocation succeeded");
+    p = buf123;
+    p += sprintf(p, "rule When123:\n");
+    for (int i = 0; i < 123; i++) {
+        p += sprintf(p, "when 1 > 0 then\n");
+    }
+    p += sprintf(p, "alert: \"OK\"\n");
+    for (int i = 0; i < 123; i++) {
+        p += sprintf(p, "end when\n");
+    }
+    sprintf(p, "end rule\n");
+    bool ok123 = test_string_validation(buf123, false);
+    free(buf123);
+    TEST_ASSERT(ok123, "123 nested when branches (exceeding limit) rejected");
+
+    /* Deeply exceeding: 1000 nested whens */
+    size_t sz1000 = 1000 * 30 + 128;
+    char *buf1000 = (char *)malloc(sz1000);
+    TEST_ASSERT(buf1000 != NULL, "allocation succeeded");
+    p = buf1000;
+    p += sprintf(p, "rule When1000:\n");
+    for (int i = 0; i < 1000; i++) {
+        p += sprintf(p, "when 1 > 0 then\n");
+    }
+    p += sprintf(p, "alert: \"OK\"\n");
+    for (int i = 0; i < 1000; i++) {
+        p += sprintf(p, "end when\n");
+    }
+    sprintf(p, "end rule\n");
+    bool ok1000 = test_string_validation(buf1000, false);
+    free(buf1000);
+    TEST_ASSERT(ok1000, "1000 nested when branches rejected safely without stack overflow");
+
+    return true;
+}
+
+static bool test_helix12_analyzer_availability_after_error(void) {
+    /* 1. Reject deeply nested input */
+    size_t n = 1000;
+    size_t sz = n * 2 + 128;
+    char *buf = (char *)malloc(sz);
+    TEST_ASSERT(buf != NULL, "allocation succeeded");
+    char *p = buf;
+    p += sprintf(p, "rule Deep:\n    let x := ");
+    memset(p, '(', n);
+    p += n;
+    *p++ = '1';
+    memset(p, ')', n);
+    p += n;
+    sprintf(p, "\nend rule\n");
+
+    bool bad_rejected = !test_string_validation(buf, true);
+    free(buf);
+    TEST_ASSERT(bad_rejected, "deep expression rejected");
+
+    /* 2. Immediately parse a valid rule in the same process and verify availability */
+    bool good_parsed = test_string_validation(
+        "rule Recovered:\n"
+        "    let x := 42\n"
+        "    when x > 10 then\n"
+        "        alert: \"System fully operational\"\n"
+        "    end when\n"
+        "end rule\n", true);
+    TEST_ASSERT(good_parsed, "analyzer successfully processes subsequent valid rule");
+    return true;
+}
+
 /* --- Diagnostic recording tests (structured messages & exact positions) --- */
 
 static bool test_diag_lexical_message_content(void) {
@@ -703,6 +940,12 @@ int main(void) {
     run_test("Unit: Missing block descriptor (invalid)", test_parser_invalid_missing_descriptor);
     run_test("Unit: Missing closing at EOF (invalid)", test_parser_invalid_missing_closing_at_eof);
     run_test("Unit: Incorrect block nesting (invalid)", test_parser_invalid_incorrect_nesting);
+    run_test("HELIX-12: Normal Expression", test_helix12_normal_expression);
+    run_test("HELIX-12: Parentheses Nesting Limits", test_helix12_parentheses_limits);
+    run_test("HELIX-12: Deep 30,000 Parentheses", test_helix12_deep_30000_parentheses);
+    run_test("HELIX-12: Repeated Not Operators", test_helix12_repeated_not);
+    run_test("HELIX-12: Nested When Branches", test_helix12_nested_branches);
+    run_test("HELIX-12: Availability After Depth Error", test_helix12_analyzer_availability_after_error);
     run_test("HELIX-38: Basic Arithmetic Operators", test_helix38_basic_arithmetic);
     run_test("HELIX-38: Spacing and Expressions", test_helix38_spacing_and_expressions);
     run_test("HELIX-38: Jira Reproduction Snippets", test_helix38_jira_reproduction);

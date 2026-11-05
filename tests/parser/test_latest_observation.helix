@@ -1,0 +1,21 @@
+# Valid Latest Observation Query (HELIX-17)
+rule LatestObservationRule:
+    intent: "Evaluate latest potassium observation in time window"
+    site: ICU
+
+    latest Observation
+    where code = potassium
+    within 24 hours before now
+
+    let k_reading := latest Observation
+    where code = potassium
+    within 24 hours before now
+
+    bind k_bound = latest Observation
+    where code = potassium
+    within 24 hours before now
+
+    when (latest Observation where code = potassium within 24 hours before now) > 5.0:
+    then:
+        alert: "Elevated Potassium Level"
+end

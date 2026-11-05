@@ -1,5 +1,6 @@
 #include "diagnostic.h"
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 
 void diag_init(DiagnosticEngine *engine, const SourceBuffer *source, FILE *out_stream) {
@@ -9,6 +10,49 @@ void diag_init(DiagnosticEngine *engine, const SourceBuffer *source, FILE *out_s
     engine->syntax_errors = 0;
     engine->warnings = 0;
     engine->out_stream = out_stream;
+    engine->entries = NULL;
+    engine->entry_count = 0;
+    engine->entry_capacity = 0;
+}
+
+void diag_free(DiagnosticEngine *engine) {
+    if (!engine) return;
+    free(engine->entries);
+    engine->entries = NULL;
+    engine->entry_count = 0;
+    engine->entry_capacity = 0;
+}
+
+size_t diag_entry_count(const DiagnosticEngine *engine) {
+    if (!engine) return 0;
+    return engine->entry_count;
+}
+
+const DiagnosticEntry *diag_get_entry(const DiagnosticEngine *engine, size_t index) {
+    if (!engine || index >= engine->entry_count) return NULL;
+    return &engine->entries[index];
+}
+
+/* Appends a structured entry; returns false on allocation failure. */
+static bool diag_record(DiagnosticEngine *engine, DiagnosticKind kind,
+                        size_t line, size_t column, const char *message) {
+    if (engine->entry_count >= engine->entry_capacity) {
+        size_t new_cap = (engine->entry_capacity == 0) ? 8 : engine->entry_capacity * 2;
+        DiagnosticEntry *grown =
+            (DiagnosticEntry *)realloc(engine->entries, new_cap * sizeof(DiagnosticEntry));
+        if (!grown) return false;
+        engine->entries = grown;
+        engine->entry_capacity = new_cap;
+    }
+
+    DiagnosticEntry *entry = &engine->entries[engine->entry_count++];
+    entry->kind = kind;
+    entry->line = line;
+    entry->column = column;
+    /* Truncating copy into fixed buffer (vsnprintf-style safety). */
+    strncpy(entry->message, message, DIAG_MESSAGE_MAX - 1);
+    entry->message[DIAG_MESSAGE_MAX - 1] = '\0';
+    return true;
 }
 
 void diag_report(DiagnosticEngine *engine, DiagnosticKind kind, size_t line, size_t column, const char *fmt, ...) {
@@ -26,6 +70,14 @@ void diag_report(DiagnosticEngine *engine, DiagnosticKind kind, size_t line, siz
         engine->warnings++;
     }
 
+    /* Format once; keep a structured copy for programmatic consumers. */
+    char message[DIAG_MESSAGE_MAX];
+    va_list msg_args;
+    va_start(msg_args, fmt);
+    vsnprintf(message, sizeof(message), fmt, msg_args);
+    va_end(msg_args);
+    diag_record(engine, kind, line, column, message);
+
     const char *fname = (engine->source && engine->source->filename) ? engine->source->filename : "<input>";
     FILE *out = engine->out_stream;
 
@@ -34,12 +86,7 @@ void diag_report(DiagnosticEngine *engine, DiagnosticKind kind, size_t line, siz
     }
 
     fprintf(out, "%s:%zu:%zu: %s: ", fname, line, column, kind_str);
-
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(out, fmt, args);
-    va_end(args);
-    fprintf(out, "\n");
+    fprintf(out, "%s\n", message);
 
     /* Print source snippet and caret */
     if (engine->source && line > 0) {

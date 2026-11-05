@@ -78,6 +78,7 @@ static bool test_lexer_basic_tokens(void) {
     TEST_ASSERT(tokens.items[8].type == TOKEN_EOF, "token 8 is EOF");
 
     token_list_free(&tokens);
+    diag_free(&diag);
     source_free(&src);
     return true;
 }
@@ -108,6 +109,7 @@ static bool test_lexer_operators_and_positions(void) {
     TEST_ASSERT(tokens.items[8].type == TOKEN_GT, ">");
 
     token_list_free(&tokens);
+    diag_free(&diag);
     source_free(&src);
     return true;
 }
@@ -128,6 +130,7 @@ static bool test_lexer_error_detection(void) {
     TEST_ASSERT(diag.lexical_errors >= 3, "detected at least 3 lexical errors");
 
     token_list_free(&tokens);
+    diag_free(&diag);
     source_free(&src);
     return true;
 }
@@ -152,6 +155,7 @@ static bool test_parser_valid_minimal(void) {
     TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
 
     token_list_free(&tokens);
+    diag_free(&diag);
     source_free(&src);
     return true;
 }
@@ -179,7 +183,145 @@ static bool test_parser_boolean_precedence(void) {
     TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
 
     token_list_free(&tokens);
+    diag_free(&diag);
     source_free(&src);
+    return true;
+}
+
+/* --- Diagnostic recording tests (structured messages & exact positions) --- */
+
+static bool test_diag_lexical_message_content(void) {
+    SourceBuffer src;
+    source_from_string("msg", "let $price := 10", &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+    TokenList tokens;
+    lexer_tokenize_all(&lexer, &tokens);
+
+    TEST_ASSERT(diag_entry_count(&diag) >= 1, "at least one recorded diagnostic");
+    const DiagnosticEntry *e = diag_get_entry(&diag, 0);
+    TEST_ASSERT(e->kind == DIAG_LEXICAL_ERROR, "entry kind is lexical error");
+    TEST_ASSERT(e->line == 1 && e->column == 5, "error points at column 5 ('$')");
+    TEST_ASSERT(strstr(e->message, "Unrecognized character") != NULL,
+                "message names the failure");
+
+    token_list_free(&tokens);
+    diag_free(&diag);
+    source_free(&src);
+    return true;
+}
+
+static bool test_diag_syntax_message_content(void) {
+    SourceBuffer src;
+    source_from_string("msg", "rule let: end", &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+    TokenList tokens;
+    lexer_tokenize_all(&lexer, &tokens);
+
+    Parser parser;
+    parser_init(&parser, &tokens, &diag);
+    parser_parse(&parser);
+
+    TEST_ASSERT(diag.syntax_errors >= 1, "syntax error recorded");
+    const DiagnosticEntry *e = diag_get_entry(&diag, 0);
+    TEST_ASSERT(e->kind == DIAG_SYNTAX_ERROR, "entry kind is syntax error");
+    TEST_ASSERT(e->line == 1 && e->column == 6, "error points at the keyword 'let'");
+    TEST_ASSERT(strstr(e->message, "Expected rule name identifier") != NULL,
+                "message names the expectation");
+
+    token_list_free(&tokens);
+    diag_free(&diag);
+    source_free(&src);
+    return true;
+}
+
+/* --- Position tracking across CRLF (Windows) line endings --- */
+
+static bool test_crlf_position_tracking(void) {
+    SourceBuffer src;
+    source_from_string("crlf", "rule A:\r\n    let x := 1\r\nend\r\n", &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+    TokenList tokens;
+    bool ok = lexer_tokenize_all(&lexer, &tokens);
+
+    TEST_ASSERT(ok, "no lexical errors on CRLF input");
+    /* rule(1,1) A(1,6) :(1,7) let(2,5) x(2,9) :=(2,11) 1(2,14) end(3,1) EOF(4,1) */
+    TEST_ASSERT(tokens.count == 9, "9 tokens incl EOF");
+    TEST_ASSERT(tokens.items[3].type == TOKEN_KW_LET &&
+                tokens.items[3].line == 2 && tokens.items[3].column == 5,
+                "'let' located at line 2 column 5");
+    TEST_ASSERT(tokens.items[7].type == TOKEN_KW_END &&
+                tokens.items[7].line == 3 && tokens.items[7].column == 1,
+                "'end' located at line 3 column 1");
+    TEST_ASSERT(tokens.items[8].type == TOKEN_EOF &&
+                tokens.items[8].line == 4 && tokens.items[8].column == 1,
+                "EOF located at line 4 column 1");
+
+    token_list_free(&tokens);
+    diag_free(&diag);
+    source_free(&src);
+    return true;
+}
+
+/* --- Robustness: every single ASCII character must tokenize & terminate --- */
+
+static bool is_expected_single(TokenType got, int c) {
+    switch (c) {
+        case ':':  return got == TOKEN_COLON;
+        case '.':  return got == TOKEN_DOT;
+        case ',':  return got == TOKEN_COMMA;
+        case '(':  return got == TOKEN_LPAREN;
+        case ')':  return got == TOKEN_RPAREN;
+        case '[':  return got == TOKEN_LBRACKET;
+        case ']':  return got == TOKEN_RBRACKET;
+        case '=':  return got == TOKEN_EQUAL;
+        case '<':  return got == TOKEN_LT;
+        case '>':  return got == TOKEN_GT;
+        case 'a':  case 'Z': case '_': return got == TOKEN_IDENTIFIER;
+        case '5':  return got == TOKEN_INT_LIT;
+        case '#':  return got == TOKEN_EOF; /* comment swallows the rest */
+        default:   return true;
+    }
+}
+
+static bool test_exhaustive_single_char_sweep(void) {
+    for (int c = 1; c < 128; c++) {
+        char buf[2] = { (char)c, '\0' };
+        SourceBuffer src;
+        source_from_string("sweep", buf, &src);
+
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        lexer_tokenize_all(&lexer, &tokens);
+
+        TEST_ASSERT(tokens.count >= 1, "always yields at least EOF");
+        TEST_ASSERT(tokens.count <= 2, "one char yields at most one token + EOF");
+        TEST_ASSERT(tokens.items[tokens.count - 1].type == TOKEN_EOF, "EOF is last");
+        TEST_ASSERT(is_expected_single(tokens.items[0].type, c),
+                    "token type matches the known character classes");
+
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
     return true;
 }
 
@@ -206,6 +348,7 @@ static bool test_file_validation(const char *path, bool expect_valid) {
     bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
 
     token_list_free(&tokens);
+    diag_free(&diag);
     source_free(&src);
 
     return is_valid == expect_valid;
@@ -267,6 +410,10 @@ int main(void) {
     run_test("Unit: Lexer Error Detection", test_lexer_error_detection);
     run_test("Unit: Parser Minimal Rule", test_parser_valid_minimal);
     run_test("Unit: Parser Boolean Precedence", test_parser_boolean_precedence);
+    run_test("Unit: Diagnostic Message Content", test_diag_lexical_message_content);
+    run_test("Unit: Parser Diagnostic Content", test_diag_syntax_message_content);
+    run_test("Unit: CRLF Position Tracking", test_crlf_position_tracking);
+    run_test("Unit: Exhaustive ASCII Sweep", test_exhaustive_single_char_sweep);
 
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);

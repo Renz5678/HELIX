@@ -38,15 +38,19 @@ typedef enum {
     TOKEN_STRING_LIT, /* e.g. "Critical glucose reading" */
 
     /* Operators */
-    TOKEN_ASSIGN, /* := */
-    TOKEN_EQUAL,  /* = */
-    TOKEN_EQ,     /* == */
-    TOKEN_NEQ,    /* != */
-    TOKEN_GT,     /* > */
-    TOKEN_GTE,    /* >= */
-    TOKEN_LT,     /* < */
-    TOKEN_LTE,    /* <= */
-    TOKEN_ARROW,  /* -> */
+    TOKEN_ASSIGN,         /* := */
+    TOKEN_EQUAL,          /* = */
+    TOKEN_EQ,             /* == */
+    TOKEN_NEQ,            /* != */
+    TOKEN_GT,             /* > */
+    TOKEN_GTE,            /* >= */
+    TOKEN_LT,             /* < */
+    TOKEN_LTE,            /* <= */
+    TOKEN_ARROW,          /* -> */
+    TOKEN_PLUS,           /* + */
+    TOKEN_MINUS,          /* - */
+    TOKEN_STAR,           /* * */
+    TOKEN_SLASH,          /* / */
 
     /* Delimiters and Punctuation */
     TOKEN_COLON,    /* : */

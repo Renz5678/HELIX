@@ -277,17 +277,21 @@ static Token lexer_next_raw(Lexer *lexer) {
             }
             return token_create(TOKEN_GT, ">", start_line, start_col);
 
+        case '+':
+            return token_create(TOKEN_PLUS, "+", start_line, start_col);
+
         case '-':
             if (peek_char(lexer) == '>') {
                 advance_char(lexer);
                 return token_create(TOKEN_ARROW, "->", start_line, start_col);
             }
-            /* Lone '-' without digits */
-            if (lexer->diag) {
-                diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
-                            "Unsupported lone character '-' (did you mean '->'?)");
-            }
-            return token_create(TOKEN_ERROR, "-", start_line, start_col);
+            return token_create(TOKEN_MINUS, "-", start_line, start_col);
+
+        case '*':
+            return token_create(TOKEN_STAR, "*", start_line, start_col);
+
+        case '/':
+            return token_create(TOKEN_SLASH, "/", start_line, start_col);
 
         case '.':
             return token_create(TOKEN_DOT, ".", start_line, start_col);

@@ -677,6 +677,111 @@ static bool test_helix38_edge_cases(void) {
     return true;
 }
 
+static bool test_helix28_embedded_nul(void) {
+    /* 1. Exact Jira reproduction bytes: "rule R: end\0@ invalid rule" (26 bytes) */
+    {
+        const char raw[] = "rule R: end\0@ invalid rule";
+        size_t raw_len = sizeof(raw) - 1;
+        const char *tmp_path = "build/test_nul_repro.helix";
+        FILE *f = fopen(tmp_path, "wb");
+        TEST_ASSERT(f != NULL, "create temp nul fixture");
+        fwrite(raw, 1, raw_len, f);
+        fclose(f);
+
+        SourceBuffer src;
+        TEST_ASSERT(source_load(tmp_path, &src), "source_load reads full file with NUL");
+        remove(tmp_path);
+        TEST_ASSERT(src.length == raw_len, "source_load preserves full byte length past NUL");
+
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        bool lex_ok = lexer_tokenize_all(&lexer, &tokens);
+
+        Parser parser;
+        parser_init(&parser, &tokens, &diag);
+        bool parse_ok = parser_parse(&parser);
+
+        TEST_ASSERT(!lex_ok, "embedded NUL fails lexical analysis");
+        TEST_ASSERT(!parse_ok, "trailing invalid syntax after NUL fails syntax analysis");
+        TEST_ASSERT(diag.lexical_errors == 2, "reports both embedded NUL and trailing '@' lexical errors");
+        TEST_ASSERT(diag.syntax_errors >= 1, "reports syntax error for trailing tokens after NUL");
+        TEST_ASSERT(tokens.count == 9, "scans all tokens before and after NUL plus EOF");
+
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+
+    /* 2. Valid rule prefix followed by NUL and invalid code via source_from_memory (API path) */
+    {
+        const char raw[] = "rule R: end rule\0@ invalid rule";
+        size_t raw_len = sizeof(raw) - 1;
+
+        SourceBuffer src;
+        TEST_ASSERT(source_from_memory("input.helix", raw, raw_len, &src),
+                    "source_from_memory preserves full byte length past NUL");
+        TEST_ASSERT(src.length == raw_len, "API buffer length includes bytes after NUL");
+
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        bool lex_ok = lexer_tokenize_all(&lexer, &tokens);
+        Parser parser;
+        parser_init(&parser, &tokens, &diag);
+        bool parse_ok = parser_parse(&parser);
+
+        TEST_ASSERT(!lex_ok && !parse_ok, "valid prefix before NUL must not hide invalid code after NUL");
+        TEST_ASSERT(diag.lexical_errors == 2, "NUL and '@' both reported after valid rule prefix");
+        TEST_ASSERT(diag.syntax_errors >= 1, "trailing invalid rule after NUL rejected by parser");
+
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+
+    /* 3. Embedded NUL inside comment, string literal, and across lines */
+    {
+        const char raw[] = "rule R: # comment\0text\nintent \"str\0ing\"\n@ end rule";
+        size_t raw_len = sizeof(raw) - 1;
+        const char *tmp_path = "build/test_nul_multiline.helix";
+        FILE *f = fopen(tmp_path, "wb");
+        TEST_ASSERT(f != NULL, "create temp multiline nul fixture");
+        fwrite(raw, 1, raw_len, f);
+        fclose(f);
+
+        SourceBuffer src;
+        TEST_ASSERT(source_load(tmp_path, &src), "load multiline nul fixture");
+        remove(tmp_path);
+
+        const char *line3 = NULL;
+        size_t line3_len = 0;
+        TEST_ASSERT(source_get_line(&src, 3, &line3, &line3_len), "source_get_line reaches lines after NUL");
+        TEST_ASSERT(line3_len == 10 && memcmp(line3, "@ end rule", 10) == 0,
+                    "source_get_line returns accurate line content after NUL");
+
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        bool lex_ok = lexer_tokenize_all(&lexer, &tokens);
+
+        TEST_ASSERT(!lex_ok, "NUL in comment/string fails lexical analysis");
+        TEST_ASSERT(diag.lexical_errors >= 3, "reports NUL in comment, NUL in string, and '@' on line 3");
+
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+
+    return true;
+}
+
 int main(void) {
     printf("========================================\n");
     printf(" HELIX Test Suite (Automated Verification)\n");
@@ -707,6 +812,7 @@ int main(void) {
     run_test("HELIX-38: Spacing and Expressions", test_helix38_spacing_and_expressions);
     run_test("HELIX-38: Jira Reproduction Snippets", test_helix38_jira_reproduction);
     run_test("HELIX-38: Edge Cases and Invariants", test_helix38_edge_cases);
+    run_test("HELIX-28: Embedded NUL Byte Handling", test_helix28_embedded_nul);
 
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);

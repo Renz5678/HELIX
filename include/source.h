@@ -20,6 +20,12 @@ typedef struct {
 bool source_load(const char *path, SourceBuffer *out);
 
 /**
+ * Initializes a SourceBuffer from an in-memory byte buffer of explicit length.
+ * Returns true on success.
+ */
+bool source_from_memory(const char *name, const char *data, size_t len, SourceBuffer *out);
+
+/**
  * Initializes a SourceBuffer from an in-memory string (useful for unit tests).
  * Returns true on success.
  */

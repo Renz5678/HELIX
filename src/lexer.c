@@ -30,7 +30,7 @@ static char advance_char(Lexer *lexer) {
     if (c == '\0') return '\0';
 
     lexer->cursor++;
-    if (c == '\n') {
+    if (c == '\n' || (c == '\r' && peek_char(lexer) != '\n')) {
         lexer->line++;
         lexer->column = 1;
     } else {
@@ -236,7 +236,7 @@ static Token scan_string(Lexer *lexer) {
     return tok;
 }
 
-Token lexer_next_token(Lexer *lexer) {
+static Token lexer_next_raw(Lexer *lexer) {
     skip_whitespace_and_comments(lexer);
 
     size_t start_col = lexer->column;
@@ -305,17 +305,21 @@ Token lexer_next_token(Lexer *lexer) {
             }
             return token_create(TOKEN_GT, ">", start_line, start_col);
 
+        case '+':
+            return token_create(TOKEN_PLUS, "+", start_line, start_col);
+
         case '-':
             if (peek_char(lexer) == '>') {
                 advance_char(lexer);
                 return token_create(TOKEN_ARROW, "->", start_line, start_col);
             }
-            /* Lone '-' without digits */
-            if (lexer->diag) {
-                diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
-                            "Unsupported lone character '-' (did you mean '->'?)");
-            }
-            return token_create(TOKEN_ERROR, "-", start_line, start_col);
+            return token_create(TOKEN_MINUS, "-", start_line, start_col);
+
+        case '*':
+            return token_create(TOKEN_STAR, "*", start_line, start_col);
+
+        case '/':
+            return token_create(TOKEN_SLASH, "/", start_line, start_col);
 
         case '.':
             return token_create(TOKEN_DOT, ".", start_line, start_col);
@@ -336,14 +340,36 @@ Token lexer_next_token(Lexer *lexer) {
             return token_create(TOKEN_RBRACKET, "]", start_line, start_col);
 
         default: {
-            char lexeme[2] = {c, '\0'};
+            char lexeme[8] = {c, '\0'};
+            unsigned char lead=(unsigned char)c;
+            if(lead>=0xC2&&lead<=0xF4){
+                size_t width=lead<0xE0?2:lead<0xF0?3:4;
+                size_t i=1;while(i<width&&((unsigned char)peek_char(lexer)&0xC0)==0x80)lexeme[i++]=advance_char(lexer);
+                lexeme[i]=0;
+                if(i!=width)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
+            }else if(lead>=128)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
             if (lexer->diag) {
                 diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
-                            "Unrecognized character '%c' (0x%02X)", c, (unsigned char)c);
+                            "Unrecognized character '%s' (0x%02X)", lexeme, (unsigned char)c);
             }
             return token_create(TOKEN_ERROR, lexeme, start_line, start_col);
         }
     }
+}
+
+Token lexer_next_token(Lexer *lexer) {
+    skip_whitespace_and_comments(lexer);
+    size_t start = lexer->cursor;
+    Token t = lexer_next_raw(lexer);
+    t.start_offset = start; t.end_offset = lexer->cursor;
+    if (lexer->diag && t.type == TOKEN_ERROR && lexer->diag->count) {
+        DiagnosticItem *d = &lexer->diag->items[lexer->diag->count-1];
+        if (d->line == t.line && d->column == t.column) {
+            d->start_offset = start; d->end_offset = lexer->cursor;
+            d->end_line = lexer->line; d->end_column = lexer->column;
+        }
+    }
+    return t;
 }
 
 bool lexer_tokenize_all(Lexer *lexer, TokenList *out_tokens) {
@@ -356,7 +382,11 @@ bool lexer_tokenize_all(Lexer *lexer, TokenList *out_tokens) {
         if (tok.type == TOKEN_ERROR) {
             success = false;
         }
-        token_list_append(out_tokens, tok);
+        if (!tok.lexeme || !token_list_append(out_tokens, tok)) {
+            token_free(&tok);
+            if (lexer->diag) lexer->diag->allocation_failed = true;
+            return false;
+        }
         if (tok.type == TOKEN_EOF) {
             break;
         }

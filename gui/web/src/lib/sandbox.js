@@ -133,8 +133,11 @@ function evalNode(node, ctx) {
     }
     case 'GroupExpr':
       return evalNode(node.children[0], ctx);
-    case 'UnaryExpr':
-      return !evalNode(node.children[0], ctx);
+    case 'UnaryExpr': {
+      const v = evalNode(node.children[0], ctx);
+      if (node.detail === '-') return typeof v === 'number' ? -v : undefined;
+      return !v;
+    }
     case 'MemberExpr': {
       /* <bind>.latest — first child is the base identifier */
       const base = node.children[0];
@@ -152,6 +155,10 @@ function evalNode(node, ctx) {
       const r = evalNode(node.children[1], ctx);
       if (l === undefined || r === undefined) return undefined;
       switch (op) {
+        case '+': return typeof l === 'number' && typeof r === 'number' ? l + r : undefined;
+        case '-': return typeof l === 'number' && typeof r === 'number' ? l - r : undefined;
+        case '*': return typeof l === 'number' && typeof r === 'number' ? l * r : undefined;
+        case '/': return typeof l === 'number' && typeof r === 'number' && r !== 0 ? l / r : undefined;
         case '>': return l > r;
         case '>=': return l >= r;
         case '<': return l < r;
@@ -188,7 +195,7 @@ function exprText(node) {
     return `${exprText(node.children[0])} ${node.detail} ${exprText(node.children[1])}`;
   }
   if (node.kind === 'TemporalWindow') return exprText(node.children[0]);
-  if (node.kind === 'UnaryExpr') return `not ${exprText(node.children[0])}`;
+  if (node.kind === 'UnaryExpr') return node.detail === '-' ? `-${exprText(node.children[0])}` : `not ${exprText(node.children[0])}`;
   return node.kind;
 }
 
@@ -217,7 +224,6 @@ export function executeRule(source, tokens, payloadText) {
   const terminology = primaryTerminology(source);
   const suppressMin = parseSuppressMinutes(source);
 
-  for (const [k, v] of Object.entries(lets)) push('dim', `let ${k} := ${v}`);
   for (const [k, v] of Object.entries(binds)) push('dim', `bind ${k} = ${v}`);
 
   /* --- resolve binds to payload values --- */
@@ -264,6 +270,16 @@ export function executeRule(source, tokens, payloadText) {
   }
 
   const ctx = new EvalContext({ lets, bindValues, observations, log });
+  for (const child of rule.children) {
+    if (child.kind === 'LetBindingNode' && child.detail && child.children[0]) {
+      const rawVal = evalNode(child.children[0], ctx);
+      if (rawVal !== undefined) {
+        const val = typeof rawVal === 'number' ? Number(rawVal.toPrecision(12)) : rawVal;
+        ctx.lets[child.detail] = val;
+        push('dim', `let ${child.detail} := ${exprText(child.children[0])} => ${val}`);
+      }
+    }
+  }
   const expr = exprText(condNode);
   const result = evalNode(condNode, ctx);
 

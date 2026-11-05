@@ -62,7 +62,7 @@ char *helix_analyze(const char *text) {
                         : t->type == TOKEN_ERROR      ? "ERROR"
                         : t->type == TOKEN_IDENTIFIER ? "IDENTIFIER"
                         : t->type <= TOKEN_STRING_LIT ? "LITERAL"
-                        : t->type <= TOKEN_ARROW      ? "OPERATOR"
+                        : t->type <= TOKEN_SLASH      ? "OPERATOR"
                                                       : "DELIMITER");
         json_write(&w, ",\"lexeme\":");
         json_string(&w, t->lexeme);

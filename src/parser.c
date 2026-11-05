@@ -194,6 +194,9 @@ static bool parse_or_expr(Parser *parser);
 static bool parse_and_expr(Parser *parser);
 static bool parse_unary_expr(Parser *parser);
 static bool parse_comparison_expr(Parser *parser);
+static bool parse_add_expr(Parser *parser);
+static bool parse_mul_expr(Parser *parser);
+static bool parse_neg_expr(Parser *parser);
 static bool parse_postfix_expr(Parser *parser);
 static bool parse_primary_expr(Parser *parser);
 static bool parse_where_clause(Parser *parser);
@@ -270,6 +273,83 @@ static bool parse_postfix_expr(Parser *parser) {
         parser->parent = node;
     }
     bool ok = impl_parse_postfix_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_neg_expr(Parser *parser);
+static bool parse_neg_expr(Parser *parser) {
+    if (!check_tok(parser, TOKEN_MINUS))
+        return parse_postfix_expr(parser);
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_UNARY, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_neg_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_mul_expr(Parser *parser);
+static bool parse_mul_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_MUL, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_mul_expr(parser);
+    if (node)
+        node->end = parser->current;
+    parser->parent = parent;
+    --parser->depth;
+    return ok;
+}
+static bool impl_parse_add_expr(Parser *parser);
+static bool parse_add_expr(Parser *parser) {
+    if (++parser->depth > 256) {
+        --parser->depth;
+        error_at_current(parser, "Parser nesting limit exceeded");
+        return false;
+    }
+    AstNode *parent = parser->parent, *node = NULL;
+    if (parser->ast) {
+        node = ast_node_new(parser->ast, AST_ADD, parser->current);
+        if (!node || !ast_append(parent, node)) {
+            ast_node_free(node);
+            parser->ast->failed = true;
+            --parser->depth;
+            return false;
+        }
+        parser->parent = node;
+    }
+    bool ok = impl_parse_add_expr(parser);
     if (node)
         node->end = parser->current;
     parser->parent = parent;
@@ -913,18 +993,47 @@ static bool impl_parse_postfix_expr(Parser *parser) {
     return true;
 }
 
+static bool impl_parse_neg_expr(Parser *parser) {
+    if (match_tok(parser, TOKEN_MINUS)) {
+        return parse_neg_expr(parser);
+    }
+    return parse_postfix_expr(parser);
+}
+
+static bool impl_parse_mul_expr(Parser *parser) {
+    if (!parse_neg_expr(parser))
+        return false;
+
+    while (match_tok(parser, TOKEN_STAR) || match_tok(parser, TOKEN_SLASH)) {
+        if (!parse_neg_expr(parser))
+            return false;
+    }
+    return true;
+}
+
+static bool impl_parse_add_expr(Parser *parser) {
+    if (!parse_mul_expr(parser))
+        return false;
+
+    while (match_tok(parser, TOKEN_PLUS) || match_tok(parser, TOKEN_MINUS)) {
+        if (!parse_mul_expr(parser))
+            return false;
+    }
+    return true;
+}
+
 static bool is_comp_op(TokenType t) {
     return (t == TOKEN_EQ || t == TOKEN_NEQ || t == TOKEN_GT || t == TOKEN_GTE || t == TOKEN_LT ||
             t == TOKEN_LTE || t == TOKEN_EQUAL);
 }
 
 static bool impl_parse_comparison_expr(Parser *parser) {
-    if (!parse_postfix_expr(parser))
+    if (!parse_add_expr(parser))
         return false;
 
     if (is_comp_op(peek_tok(parser).type)) {
         advance_tok(parser); /* Consume comparison operator */
-        if (!parse_postfix_expr(parser)) {
+        if (!parse_add_expr(parser)) {
             return false;
         }
     }

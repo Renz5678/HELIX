@@ -30,7 +30,7 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_KW_ALERT` | `alert` | Alert action statement | `alert: "Severe Hyperglycemia", "CRITICAL"` |
 | `TOKEN_KW_SUPPRESS` | `suppress` | Alert suppression statement | `suppress: within 6 hours` |
 | `TOKEN_KW_OTHERWISE`| `otherwise` | Alternative branch in `when` | `otherwise let status := "normal"` |
-| `TOKEN_KW_END` | `end` | Rule block terminator | `end` |
+| `TOKEN_KW_END` | `end` | Block terminator keyword | `end rule`, `end bind`, `end when` |
 
 ---
 

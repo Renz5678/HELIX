@@ -4,43 +4,49 @@
 #include <string.h>
 
 void diag_init(DiagnosticEngine *engine, const SourceBuffer *source, FILE *out_stream) {
-    if (!engine) return;
+    if (!engine)
+        return;
+    memset(engine, 0, sizeof(*engine));
     engine->source = source;
-    engine->lexical_errors = 0;
-    engine->syntax_errors = 0;
-    engine->warnings = 0;
     engine->out_stream = out_stream;
-    engine->entries = NULL;
-    engine->entry_count = 0;
-    engine->entry_capacity = 0;
 }
 
 void diag_free(DiagnosticEngine *engine) {
-    if (!engine) return;
+    if (!engine)
+        return;
+    for (size_t i = 0; i < engine->count; i++) {
+        free(engine->items[i].message);
+        free(engine->items[i].snippet);
+    }
+    free(engine->items);
+    engine->items = NULL;
+    engine->count = engine->capacity = 0;
+
     free(engine->entries);
     engine->entries = NULL;
-    engine->entry_count = 0;
-    engine->entry_capacity = 0;
+    engine->entry_count = engine->entry_capacity = 0;
 }
 
 size_t diag_entry_count(const DiagnosticEngine *engine) {
-    if (!engine) return 0;
+    if (!engine)
+        return 0;
     return engine->entry_count;
 }
 
 const DiagnosticEntry *diag_get_entry(const DiagnosticEngine *engine, size_t index) {
-    if (!engine || index >= engine->entry_count) return NULL;
+    if (!engine || index >= engine->entry_count)
+        return NULL;
     return &engine->entries[index];
 }
 
-/* Appends a structured entry; returns false on allocation failure. */
 static bool diag_record(DiagnosticEngine *engine, DiagnosticKind kind,
                         size_t line, size_t column, const char *message) {
     if (engine->entry_count >= engine->entry_capacity) {
         size_t new_cap = (engine->entry_capacity == 0) ? 8 : engine->entry_capacity * 2;
         DiagnosticEntry *grown =
             (DiagnosticEntry *)realloc(engine->entries, new_cap * sizeof(DiagnosticEntry));
-        if (!grown) return false;
+        if (!grown)
+            return false;
         engine->entries = grown;
         engine->entry_capacity = new_cap;
     }
@@ -49,66 +55,91 @@ static bool diag_record(DiagnosticEngine *engine, DiagnosticKind kind,
     entry->kind = kind;
     entry->line = line;
     entry->column = column;
-    /* Truncating copy into fixed buffer (vsnprintf-style safety). */
     strncpy(entry->message, message, DIAG_MESSAGE_MAX - 1);
     entry->message[DIAG_MESSAGE_MAX - 1] = '\0';
     return true;
 }
 
-void diag_report(DiagnosticEngine *engine, DiagnosticKind kind, size_t line, size_t column, const char *fmt, ...) {
-    if (!engine) return;
-
-    const char *kind_str = "Error";
-    if (kind == DIAG_LEXICAL_ERROR) {
-        kind_str = "Lexical Error";
-        engine->lexical_errors++;
-    } else if (kind == DIAG_SYNTAX_ERROR) {
-        kind_str = "Syntax Error";
-        engine->syntax_errors++;
-    } else if (kind == DIAG_WARNING) {
-        kind_str = "Warning";
-        engine->warnings++;
+static char *copy(const char *s, size_t n) {
+    char *p = malloc(n + 1);
+    if (p) {
+        memcpy(p, s, n);
+        p[n] = 0;
     }
+    return p;
+}
 
-    /* Format once; keep a structured copy for programmatic consumers. */
-    char message[DIAG_MESSAGE_MAX];
-    va_list msg_args;
-    va_start(msg_args, fmt);
-    vsnprintf(message, sizeof(message), fmt, msg_args);
-    va_end(msg_args);
-    diag_record(engine, kind, line, column, message);
-
-    const char *fname = (engine->source && engine->source->filename) ? engine->source->filename : "<input>";
-    FILE *out = engine->out_stream;
-
-    if (!out) {
+void diag_report(DiagnosticEngine *e, DiagnosticKind kind, size_t line, size_t column,
+                 const char *fmt, ...) {
+    if (!e)
         return;
-    }
+    const char *label = "Warning";
+    if (kind == DIAG_LEXICAL_ERROR) {
+        e->lexical_errors++;
+        label = "Lexical Error";
+    } else if (kind == DIAG_SYNTAX_ERROR) {
+        e->syntax_errors++;
+        label = "Syntax Error";
+    } else
+        e->warnings++;
+    char message[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
 
-    fprintf(out, "%s:%zu:%zu: %s: ", fname, line, column, kind_str);
-    fprintf(out, "%s\n", message);
+    diag_record(e, kind, line, column, message);
 
-    /* Print source snippet and caret */
-    if (engine->source && line > 0) {
-        const char *line_start = NULL;
-        size_t line_len = 0;
-        if (source_get_line(engine->source, line, &line_start, &line_len)) {
-            fprintf(out, "    %.*s\n", (int)line_len, line_start);
-            fprintf(out, "    ");
-            for (size_t i = 1; i < column; i++) {
-                /* If character is a tab, indent by tab size or space */
-                if (i <= line_len && line_start[i - 1] == '\t') {
-                    fputc('\t', out);
-                } else {
-                    fputc(' ', out);
-                }
+    const char *start = "";
+    size_t len = 0;
+    if (e->source)
+        source_get_line(e->source, line, &start, &len);
+    if (e->count < 256) {
+        if (e->count == e->capacity) {
+            size_t cap = e->capacity ? e->capacity * 2 : 8;
+            DiagnosticItem *items = realloc(e->items, cap * sizeof(*items));
+            if (!items)
+                e->allocation_failed = true;
+            else {
+                e->items = items;
+                e->capacity = cap;
             }
-            fprintf(out, "^\n");
         }
+        if (!e->allocation_failed) {
+            DiagnosticItem d = {0};
+            d.kind = kind;
+            d.line = line;
+            d.column = column;
+            d.end_line = line;
+            d.end_column = column + 1;
+            d.message = copy(message, strlen(message));
+            d.snippet = copy(start, len);
+            if (e->source && start >= e->source->content &&
+                start <= e->source->content + e->source->length)
+                d.start_offset = (size_t)(start - e->source->content) + (column ? column - 1 : 0);
+            if (e->source && d.start_offset > e->source->length)
+                d.start_offset = e->source->length;
+            d.end_offset =
+                d.start_offset + (e->source && d.start_offset < e->source->length ? 1 : 0);
+            if (!d.message || !d.snippet) {
+                free(d.message);
+                free(d.snippet);
+                e->allocation_failed = true;
+            } else
+                e->items[e->count++] = d;
+        }
+    }
+    if (e->out_stream) {
+        fprintf(e->out_stream, "%s:%zu:%zu: %s: %s\n",
+                e->source && e->source->filename ? e->source->filename : "<input>", line, column,
+                label, message);
+        fprintf(e->out_stream, "    %.*s\n    ", (int)len, start);
+        for (size_t i = 1; i < column; i++)
+            fputc(i <= len && start[i - 1] == '\t' ? '\t' : ' ', e->out_stream);
+        fprintf(e->out_stream, "^\n");
     }
 }
 
-bool diag_has_errors(const DiagnosticEngine *engine) {
-    if (!engine) return false;
-    return (engine->lexical_errors > 0 || engine->syntax_errors > 0);
+bool diag_has_errors(const DiagnosticEngine *e) {
+    return e && (e->lexical_errors || e->syntax_errors || e->allocation_failed);
 }

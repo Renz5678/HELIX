@@ -1,0 +1,12 @@
+# Patient-specific high glucose detection
+rule HighGlucoseAlert:
+    intent: "Detect a high latest glucose reading"
+    source glucose_data
+
+    let threshold := 250
+
+    when glucose_data.latest > threshold:
+    then:
+        alert: "High glucose detected", "WARNING"
+    end when
+end rule

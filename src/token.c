@@ -13,7 +13,7 @@ static char *duplicate_string(const char *s) {
 }
 
 Token token_create(TokenType type, const char *lexeme, size_t line, size_t column) {
-    Token t;
+    Token t = {0};
     t.type = type;
     t.lexeme = duplicate_string(lexeme ? lexeme : "");
     t.line = line;

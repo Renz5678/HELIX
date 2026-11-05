@@ -50,6 +50,15 @@ The initial HELIX language documentation contains several drafting ambiguities a
 - **Decision:**
   - The grammar specifies `duration_expr` as accepting numeric literals followed by optional identifier units (e.g., `24 hours`, `10 m`, `7 days`), single string literals (e.g., `"24h"`), or standalone identifiers.
 
+### 2.6 Explicit Block-Specific Terminators (`end rule`, `end bind`, `end when`)
+- **Analysis:** Earlier documentation and parser drafts had an inconsistency where documentation illustrated explicit block-specific terminators (such as `end bind`, `end when`, `end rule`), while older parser implementations accepted a generic standalone `end`.
+- **Decision:**
+  - `end rule` closes a rule block.
+  - `end bind` closes a binding block.
+  - `end when` closes a conditional block.
+  - A standalone `end` is not a valid complete block terminator.
+  - Mismatched block terminators (e.g. `end rule` closing a `bind` block) produce a syntax error.
+
 ---
 
 ## 3. Lexical Specification
@@ -104,11 +113,11 @@ string_literal    = '"' , { string_char } , '"' ;
    HELIX Grammar (Extended Backus-Naur Form)
    ========================================== *)
 
-program              = { rule_decl } , EOF ;
+program              = rule_decl , { rule_decl } , EOF ;
 
 rule_decl            = "rule" , IDENTIFIER , [ ":" ] ,
                        { rule_element } ,
-                       "end" ;
+                       "end" , "rule" ;
 
 rule_element         = intent_decl
                      | schedule_decl
@@ -131,15 +140,16 @@ site_decl            = "site" , [ ":" ] , ( IDENTIFIER | STRING_LITERAL ) ;
 
 source_decl          = "source" , [ ":" ] , IDENTIFIER , [ "->" , IDENTIFIER ] , [ "(" , [ argument_list ] , ")" ] ;
 
-bind_decl            = "bind" , IDENTIFIER , [ ":=" | "=" | ":" | "->" ] , postfix_expr , [ where_clause ] , [ within_clause ] ;
+bind_decl            = "bind" , IDENTIFIER , [ ":=" | "=" | ":" | "->" ] , postfix_expr , [ where_clause ] , [ within_clause ] , "end" , "bind" ;
 
 let_decl             = "let" , IDENTIFIER , ( ":=" | "=" ) , expression ;
 
 (* Conditional and Control Flow *)
 when_stmt            = "when" , [ "for" , IDENTIFIER ] , expression ,
                        [ ":" ] , "then" , [ ":" ] ,
-                       { statement_in_branch } ,
-                       [ "otherwise" , [ ":" ] , { statement_in_branch } ] ;
+                       statement_in_branch , { statement_in_branch } ,
+                       [ "otherwise" , [ ":" ] , statement_in_branch , { statement_in_branch } ] ,
+                       "end" , "when" ;
 
 statement_in_branch  = let_decl
                      | action_stmt
@@ -150,7 +160,7 @@ action_stmt          = alert_stmt | suppress_stmt ;
 
 alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
 
-suppress_stmt        = "suppress" , [ ":" ] , [ IDENTIFIER | STRING_LITERAL | duration_expr ] ;
+suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)
@@ -199,3 +209,27 @@ primary_expr         = IDENTIFIER
                      | "latest"
                      | "(" , expression , ")" ;
 ```
+
+
+## 5. Studio compatibility and evaluation
+
+The native parser requires at least one rule, at least one statement in each
+present then/otherwise branch, and an operand after suppress. Thus the executable
+productions use `program = rule_decl, {rule_decl}, EOF`, and nonempty branch
+sequences. `suppress within duration_expr` is accepted.
+
+Newlines/indentation are whitespace, not block delimiters. Blocks are explicitly closed
+with block-specific terminators: `end when` closes a when block, `end bind` closes a bind
+declaration block, and `end rule` closes a rule block. AST construction uses the same
+parsing functions and preserves this grouping.
+
+The lexer retains the 21 keywords. Boolean values enter through typed tables; true
+and false spellings are identifiers, not literal keywords. Accepted calls, indexes,
+arrows, standalone latest, and when-for remain syntax-valid but are diagnosed as
+unsupported executable expressions during semantic validation. Metadata arguments
+are preserved. Compare docs/evaluation.md for the supported runtime subset.
+
+A bind filter followed by within is normalized to one series query even if the
+recursive expression parser captures within in the filter expression. A condition
+window requires exactly one series reference. Windowing selects recent eligible
+readings; it does not establish sustained abnormal observations.

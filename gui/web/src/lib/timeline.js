@@ -4,7 +4,7 @@
  * Derives the rule's temporal contract from the source text:
  *   - monitored terminology code (LOINC/SNOMED/RxNorm call)
  *   - trigger comparison (operator + threshold, resolving `let` variables)
- *   - suppression window (`suppress: within N <unit>`)
+ *   - suppression window (`suppress: within N <unit>` or `suppress repeat_of : Rule within N <unit>`)
  *
  * then replays a mock event stream to show when alerts fire and when
  * the suppression window blocks duplicates.
@@ -41,7 +41,7 @@ export function primaryTerminology(code) {
 
 /** Suppression window in minutes (0 when absent). */
 export function parseSuppressMinutes(code) {
-  const m = code.match(/\bsuppress\s*:\s*within\s+(\d+(?:\.\d+)?)\s*([A-Za-z]+)/);
+  const m = code.match(/\bsuppress\s*:?\s*(?:repeat_of\s*:\s*[A-Za-z_]\w*\s+)?within\s+(\d+(?:\.\d+)?)\s*([A-Za-z]+)/);
   if (!m) return 0;
   const unit = UNIT_MIN[m[2].toLowerCase()];
   return unit ? Math.round(parseFloat(m[1]) * unit) : 0;

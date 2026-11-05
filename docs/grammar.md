@@ -59,6 +59,11 @@ The initial HELIX language documentation contains several drafting ambiguities a
   - A standalone `end` is not a valid complete block terminator.
   - Mismatched block terminators (e.g. `end rule` closing a `bind` block) produce a syntax error.
 
+### 2.7 Targeted Repeat Suppression
+- `suppress repeat_of : HighGlucoseAlert within 4 hours` names the rule whose repeated notifications are suppressed. The `within` clause is optional.
+- `repeat_of` is contextual only when followed by `:` in a suppression statement; it remains an identifier elsewhere, preserving the 21 reserved words and existing suppression forms.
+- The parser validates syntax, not rule-name resolution or notification delivery. The timeline remains a preview of one rule's suppression window.
+
 ---
 
 ## 3. Lexical Specification
@@ -160,7 +165,10 @@ action_stmt          = alert_stmt | suppress_stmt ;
 
 alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
 
-suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
+suppress_stmt        = "suppress" , [ ":" ] ,
+                       ( repeat_suppression | within_clause | duration_expr | IDENTIFIER | STRING_LITERAL ) ;
+
+repeat_suppression   = "repeat_of" , ":" , IDENTIFIER , [ within_clause ] ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)

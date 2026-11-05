@@ -1,9 +1,16 @@
 # Build artifacts
 *.o
+*.exe
 helix
+/helix
+/helix.exe
 tests/test_runner
+/tests/test_runner
+/tests/test_runner.exe
 engine/*.o
 engine/helix
+/gui/helix-server
+/gui/helix-server.exe
 
 # WebAssembly build artifacts (intermediate)
 *.wasm.map
@@ -13,6 +20,11 @@ web/node_modules/
 web/dist/
 node_modules/
 dist/
+/gui/web/node_modules/
+/gui/dist/
+
+# Runtime workspace
+/workspace/
 
 # Source of truth markdown file
 SOURCE_OF_TRUTH.md
@@ -25,3 +37,8 @@ web/playwright-report/
 web/*.tsbuildinfo
 __pycache__/
 .toolchains/
+
+# Editor/OS noise
+.vscode/
+*.swp
+Thumbs.db

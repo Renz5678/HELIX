@@ -3,13 +3,63 @@
 #include <stdlib.h>
 #include <string.h>
 
-void diag_init(DiagnosticEngine *e, const SourceBuffer *source, FILE *out) {
-    if (!e)
+void diag_init(DiagnosticEngine *engine, const SourceBuffer *source, FILE *out_stream) {
+    if (!engine)
         return;
-    memset(e, 0, sizeof(*e));
-    e->source = source;
-    e->out_stream = out;
+    memset(engine, 0, sizeof(*engine));
+    engine->source = source;
+    engine->out_stream = out_stream;
 }
+
+void diag_free(DiagnosticEngine *engine) {
+    if (!engine)
+        return;
+    for (size_t i = 0; i < engine->count; i++) {
+        free(engine->items[i].message);
+        free(engine->items[i].snippet);
+    }
+    free(engine->items);
+    engine->items = NULL;
+    engine->count = engine->capacity = 0;
+
+    free(engine->entries);
+    engine->entries = NULL;
+    engine->entry_count = engine->entry_capacity = 0;
+}
+
+size_t diag_entry_count(const DiagnosticEngine *engine) {
+    if (!engine)
+        return 0;
+    return engine->entry_count;
+}
+
+const DiagnosticEntry *diag_get_entry(const DiagnosticEngine *engine, size_t index) {
+    if (!engine || index >= engine->entry_count)
+        return NULL;
+    return &engine->entries[index];
+}
+
+static bool diag_record(DiagnosticEngine *engine, DiagnosticKind kind,
+                        size_t line, size_t column, const char *message) {
+    if (engine->entry_count >= engine->entry_capacity) {
+        size_t new_cap = (engine->entry_capacity == 0) ? 8 : engine->entry_capacity * 2;
+        DiagnosticEntry *grown =
+            (DiagnosticEntry *)realloc(engine->entries, new_cap * sizeof(DiagnosticEntry));
+        if (!grown)
+            return false;
+        engine->entries = grown;
+        engine->entry_capacity = new_cap;
+    }
+
+    DiagnosticEntry *entry = &engine->entries[engine->entry_count++];
+    entry->kind = kind;
+    entry->line = line;
+    entry->column = column;
+    strncpy(entry->message, message, DIAG_MESSAGE_MAX - 1);
+    entry->message[DIAG_MESSAGE_MAX - 1] = '\0';
+    return true;
+}
+
 static char *copy(const char *s, size_t n) {
     char *p = malloc(n + 1);
     if (p) {
@@ -18,6 +68,7 @@ static char *copy(const char *s, size_t n) {
     }
     return p;
 }
+
 void diag_report(DiagnosticEngine *e, DiagnosticKind kind, size_t line, size_t column,
                  const char *fmt, ...) {
     if (!e)
@@ -36,6 +87,9 @@ void diag_report(DiagnosticEngine *e, DiagnosticKind kind, size_t line, size_t c
     va_start(args, fmt);
     vsnprintf(message, sizeof(message), fmt, args);
     va_end(args);
+
+    diag_record(e, kind, line, column, message);
+
     const char *start = "";
     size_t len = 0;
     if (e->source)
@@ -85,17 +139,7 @@ void diag_report(DiagnosticEngine *e, DiagnosticKind kind, size_t line, size_t c
         fprintf(e->out_stream, "^\n");
     }
 }
-void diag_free(DiagnosticEngine *e) {
-    if (!e)
-        return;
-    for (size_t i = 0; i < e->count; i++) {
-        free(e->items[i].message);
-        free(e->items[i].snippet);
-    }
-    free(e->items);
-    e->items = NULL;
-    e->count = e->capacity = 0;
-}
+
 bool diag_has_errors(const DiagnosticEngine *e) {
     return e && (e->lexical_errors || e->syntax_errors || e->allocation_failed);
 }

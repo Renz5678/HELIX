@@ -47,6 +47,10 @@ typedef enum {
     TOKEN_LT,             /* < */
     TOKEN_LTE,            /* <= */
     TOKEN_ARROW,          /* -> */
+    TOKEN_PLUS,           /* + */
+    TOKEN_MINUS,          /* - */
+    TOKEN_STAR,           /* * */
+    TOKEN_SLASH,          /* / */
 
     /* Delimiters and Punctuation */
     TOKEN_COLON,          /* : */

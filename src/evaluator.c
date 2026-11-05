@@ -431,6 +431,46 @@ static Value expression(Context *c, AstNode *n) {
                 diagnostic(c, "evaluation", "LOGICAL_TYPE", "NOT requires Boolean", n);
             return bool_value(truth_not(truth(v)));
         }
+        if (token(c, n->start)->type == TOKEN_MINUS) {
+            if (v.type == VAL_MISSING)
+                return (Value){0};
+            if (v.type != VAL_INT && v.type != VAL_FLOAT) {
+                diagnostic(c, "evaluation", "ARITHMETIC_TYPE",
+                           "Unary '-' requires a numeric operand", n);
+                return (Value){0};
+            }
+            v.number = -v.number;
+            return v;
+        }
+        return v;
+    }
+    if (n->kind == AST_ADD || n->kind == AST_MUL) {
+        Value v = expression(c, n->children[0]);
+        for (size_t i = 1; i < n->count; i++) {
+            TokenType op = token(c, n->children[i - 1]->end)->type;
+            Value b = expression(c, n->children[i]);
+            if (v.type == VAL_MISSING || b.type == VAL_MISSING) {
+                v = (Value){0};
+                continue;
+            }
+            if ((v.type != VAL_INT && v.type != VAL_FLOAT) ||
+                (b.type != VAL_INT && b.type != VAL_FLOAT)) {
+                diagnostic(c, "evaluation", "ARITHMETIC_TYPE",
+                           "Arithmetic operands must be numeric", n);
+                return (Value){0};
+            }
+            if (op == TOKEN_SLASH && b.number == 0.0) {
+                v = (Value){0};
+                continue;
+            }
+            double r = op == TOKEN_PLUS    ? v.number + b.number
+                       : op == TOKEN_MINUS ? v.number - b.number
+                       : op == TOKEN_STAR  ? v.number * b.number
+                                           : v.number / b.number;
+            bool is_int = v.type == VAL_INT && b.type == VAL_INT && op != TOKEN_SLASH &&
+                          fabs(r) <= 9007199254740991.0;
+            v = (Value){.type = is_int ? VAL_INT : VAL_FLOAT, .number = r};
+        }
         return v;
     }
     if (n->kind == AST_COMPARISON) {
@@ -439,7 +479,8 @@ static Value expression(Context *c, AstNode *n) {
         if (within && !c->row)
             c->window = duration(c, within);
         Value a = expression(c, n->children[0]);
-        if (n->count > 1 && n->children[1]->kind == AST_POSTFIX) {
+        if (n->count > 1 && n->children[1]->kind != AST_WHERE &&
+            n->children[1]->kind != AST_WITHIN) {
             Value b = expression(c, n->children[1]);
             a = compare(c, a, b, token(c, n->children[0]->end)->type, n);
         }
@@ -747,12 +788,18 @@ static void statement(Context *c, AstNode *node, size_t scope) {
         AstNode *d = find(n, AST_DURATION);
         double ms = -1;
         const char *reason = NULL;
+        size_t index = n->start + 1;
+        if (index < c->program->tokens.count && token(c, index)->type == TOKEN_COLON)
+            index++;
+        if (index + 2 < c->program->tokens.count &&
+            !strcmp(token(c, index)->lexeme, "repeat_of") &&
+            token(c, index + 1)->type == TOKEN_COLON &&
+            token(c, index + 2)->type == TOKEN_IDENTIFIER) {
+            reason = token(c, index + 2)->lexeme;
+        }
         if (d || child(n, AST_WITHIN))
             ms = duration(c, n);
-        else {
-            size_t index = n->start + 1;
-            if (token(c, index)->type == TOKEN_COLON)
-                index++;
+        else if (!reason) {
             Token *t = token(c, index);
             if (t->type == TOKEN_STRING_LIT)
                 reason = literal(c, t->lexeme);

@@ -266,6 +266,132 @@ static bool test_parser_invalid_incorrect_nesting(void) {
         "end when\n", false);
 }
 
+static bool test_parser_suppress_repeat_of(void) {
+    const struct { const char *source; bool valid; } cases[] = {
+        {"rule R: suppress repeat_of : HighGlucoseAlert end rule", true},
+        {"rule R: suppress repeat_of:HighGlucoseAlert within 4 hours end rule", true},
+        {"rule R: suppress: repeat_of : R within 1.5 hours end rule", true},
+        {"rule R: when x then suppress repeat_of : R within 4 hours end when end rule", true},
+        {"rule R: when x then alert: \"high\" otherwise suppress repeat_of : R end when end rule", true},
+        {"rule R: when x then when y then suppress repeat_of : R end when otherwise alert: \"low\" end when end rule", true},
+        {"rule R:\r\n suppress repeat_of # target follows\r\n : R within 4 hours\r\nend rule", true},
+        {"rule A: suppress repeat_of : B end rule rule B: suppress repeat_of : A end rule", true},
+        {"rule repeat_of: let repeat_of := 1 suppress repeat_of end rule", true},
+        {"rule R: suppress: within 4 hours end rule", true},
+        {"rule R: suppress \"reason\" end rule", true},
+        {"rule R: suppress R end rule", true},
+        {"rule R: suppress 4 hours end rule", true},
+        {"rule R: suppress repeat_of : end rule", false},
+        {"rule R: suppress repeat_of : \"R\" end rule", false},
+        {"rule R: suppress repeat_of : 123 end rule", false},
+        {"rule R: suppress repeat_of : when x then alert: \"bad\" end when end rule", false},
+        {"rule R: suppress repeat_of : R within end rule", false},
+        {"rule R: suppress repeat_of : R within : 4 hours end rule", false},
+        {"rule R: suppress repeat_of : R : end rule", false},
+        {"rule R: suppress repeat_of R end rule", false},
+        {"rule R: suppress other : R end rule", false},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        SourceBuffer src;
+        TEST_ASSERT(source_from_string("suppress", cases[i].source, &src), "source loaded");
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        bool lexed = lexer_tokenize_all(&lexer, &tokens);
+        Parser parser;
+        parser_init(&parser, &tokens, &diag);
+        bool parsed = parser_parse(&parser);
+        bool correct = lexed && parsed == cases[i].valid &&
+            (diag.syntax_errors == 0) == cases[i].valid;
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+        if (!correct) printf("\n  Source: %s\n", cases[i].source);
+        TEST_ASSERT(correct, "suppression syntax matches expected validity");
+    }
+    return true;
+}
+
+static bool test_parser_arithmetic_expressions(void) {
+    const struct { const char *source; bool valid; } cases[] = {
+        {"rule R: let x := 1 + 2 - 3 * 4 / 5 end rule", true},
+        {"rule R: let severe_threshold = 250 + 3 end rule", true},
+        {"rule R: let A := (B + 3) * G / 24 end rule", true},
+        {"rule R: let x := -1 end rule", true},
+        {"rule R: let x := -3.5 + -2 * -4 end rule", true},
+        {"rule R: let x := --1 end rule", true},
+        {"rule R: let x := -(1 + 2) * -(3 - 4) end rule", true},
+        {"rule R: let x := A*-B + C/-D - E end rule", true},
+        {"rule R: when 2 + 3 * 4 == 14 and -1 < 0 then alert: \"ok\" end when end rule", true},
+        {"rule R: when (g.latest - 100) * 2 / 3 >= threshold + 5 then alert: \"hi\" end when end rule", true},
+        {"rule R: when not -a + b * c > d - e / f then alert: \"ok\" end when end rule", true},
+        {"rule R: alert: \"delta\", g.latest - threshold, -1 end rule", true},
+        {"rule R: let x := 1 + end rule", false},
+        {"rule R: let x := 1 - end rule", false},
+        {"rule R: let x := 1 * end rule", false},
+        {"rule R: let x := 1 / end rule", false},
+        {"rule R: let x := * 2 end rule", false},
+        {"rule R: let x := / 2 end rule", false},
+        {"rule R: let x := + 2 end rule", false},
+        {"rule R: let x := 1 + * 2 end rule", false},
+        {"rule R: let x := 1 * / 2 end rule", false},
+        {"rule R: let x := - end rule", false},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        SourceBuffer src;
+        TEST_ASSERT(source_from_string("arith", cases[i].source, &src), "source loaded");
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        bool lexed = lexer_tokenize_all(&lexer, &tokens);
+        Parser parser;
+        parser_init(&parser, &tokens, &diag);
+        bool parsed = parser_parse(&parser);
+        bool correct = lexed && (diag.lexical_errors == 0) &&
+            parsed == cases[i].valid && (diag.syntax_errors == 0) == cases[i].valid;
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+        if (!correct) printf("\n  Source: %s\n", cases[i].source);
+        TEST_ASSERT(correct, "arithmetic syntax matches expected validity");
+    }
+
+    /* Verify AST precedence: in 1 + 2 - 3 * 4 / 5, '*' and '/' group inside '+' and '-' */
+    {
+        SourceBuffer src;
+        TEST_ASSERT(source_from_string("prec", "rule R: let x := 1 + 2 - 3 * 4 / 5 end rule", &src),
+                    "prec source loaded");
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        TEST_ASSERT(lexer_tokenize_all(&lexer, &tokens), "prec lexed");
+        Parser parser;
+        parser_init(&parser, &tokens, &diag);
+        AstProgram *prog = parser_build_ast(&parser);
+        TEST_ASSERT(prog != NULL, "prec AST built");
+        /* root -> AST_RULE -> AST_BRANCH_STMT -> AST_LET -> AST_EXPRESSION -> AST_OR -> AST_AND -> AST_UNARY -> AST_COMPARISON -> AST_ADD */
+        AstNode *n = prog->root;
+        while (n && n->kind != AST_ADD && n->count > 0) n = n->children[0];
+        TEST_ASSERT(n && n->kind == AST_ADD, "found AST_ADD node");
+        TEST_ASSERT(n->count == 3, "AST_ADD has 3 additive terms: 1, 2, (3 * 4 / 5)");
+        TEST_ASSERT(n->children[0]->kind == AST_MUL && n->children[0]->count == 1, "term 0 is 1");
+        TEST_ASSERT(n->children[1]->kind == AST_MUL && n->children[1]->count == 1, "term 1 is 2");
+        TEST_ASSERT(n->children[2]->kind == AST_MUL && n->children[2]->count == 3,
+                    "term 2 is AST_MUL with 3 multiplicative factors (3 * 4 / 5)");
+        ast_program_free(prog);
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+    return true;
+}
+
 /* --- Diagnostic recording tests (structured messages & exact positions) --- */
 
 static bool test_diag_lexical_message_content(void) {
@@ -689,6 +815,8 @@ int main(void) {
     run_test("Unit: Lexer Error Detection", test_lexer_error_detection);
     run_test("Unit: Parser Minimal Rule", test_parser_valid_minimal);
     run_test("Unit: Parser Boolean Precedence", test_parser_boolean_precedence);
+    run_test("Unit: Parser Suppress Repeat Of", test_parser_suppress_repeat_of);
+    run_test("Unit: Parser Arithmetic Expressions", test_parser_arithmetic_expressions);
     run_test("Unit: Diagnostic Message Content", test_diag_lexical_message_content);
     run_test("Unit: Parser Diagnostic Content", test_diag_syntax_message_content);
     run_test("Unit: CRLF Position Tracking", test_crlf_position_tracking);

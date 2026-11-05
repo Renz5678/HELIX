@@ -1025,23 +1025,51 @@ static bool impl_parse_schedule_decl(Parser *parser) {
     return parse_duration_expr(parser);
 }
 
-static bool impl_parse_terminology_decl(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_TERMINOLOGY, "Expected 'terminology'"))
-        return false;
-    match_tok(parser, TOKEN_COLON); /* Optional colon */
-    if (!consume_tok(parser, TOKEN_IDENTIFIER,
-                     "Expected terminology system name (e.g. LOINC, SNOMED)")) {
-        return false;
-    }
+static bool parse_terminology_selector(Parser *parser) {
     if (match_tok(parser, TOKEN_LPAREN)) {
         if (!check_tok(parser, TOKEN_RPAREN)) {
             if (!parse_argument_list(parser))
                 return false;
         }
-        if (!consume_tok(parser, TOKEN_RPAREN, "Expected ')' after terminology arguments")) {
+        return consume_tok(parser, TOKEN_RPAREN, "Expected ')' after terminology arguments");
+    }
+    if (match_tok(parser, TOKEN_LBRACKET)) {
+        if (!parse_expression(parser))
+            return false;
+        return consume_tok(parser, TOKEN_RBRACKET, "Expected ']' after terminology reference");
+    }
+    return true;
+}
+
+static bool impl_parse_terminology_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_TERMINOLOGY, "Expected 'terminology'"))
+        return false;
+    match_tok(parser, TOKEN_COLON); /* Optional colon */
+    if (!consume_tok(parser, TOKEN_IDENTIFIER,
+                     "Expected terminology concept or system name (e.g. potassium, LOINC, SNOMED)")) {
+        return false;
+    }
+    if (match_tok(parser, TOKEN_ARROW)) {
+        if (!consume_tok(parser, TOKEN_IDENTIFIER,
+                         "Expected terminology system name after '->' (e.g. LOINC, SNOMED)")) {
             return false;
         }
+        if (!parse_terminology_selector(parser))
+            return false;
+        while (check_tok(parser, TOKEN_IDENTIFIER) && peek_next_tok(parser).type == TOKEN_ARROW) {
+            advance_tok(parser); /* Consume local concept identifier */
+            advance_tok(parser); /* Consume '->' */
+            if (!consume_tok(parser, TOKEN_IDENTIFIER,
+                             "Expected terminology system name after '->' (e.g. LOINC, SNOMED)")) {
+                return false;
+            }
+            if (!parse_terminology_selector(parser))
+                return false;
+        }
+        return true;
     }
+    if (!parse_terminology_selector(parser))
+        return false;
     if (check_tok(parser, TOKEN_STRING_LIT)) {
         advance_tok(parser);
     }

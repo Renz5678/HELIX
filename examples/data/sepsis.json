@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "evaluationTime": "2026-10-31T12:00:00Z",
+  "Bindings": {
+    "Labs.white_blood_count": {
+      "table": "Vitals",
+      "column": "white_blood_count"
+    }
+  },
+  "tables": [
+    {
+      "name": "Vitals",
+      "patientIdColumn": "patient_id",
+      "timestampColumn": "timestamp",
+      "defaultValueColumn": "systolic_bp",
+      "columns": [
+        {
+          "name": "patient_id",
+          "type": "String"
+        },
+        {
+          "name": "timestamp",
+          "type": "DateTime"
+        },
+        {
+          "name": "systolic_bp",
+          "type": "Float"
+        },
+        {
+          "name": "body_temperature",
+          "type": "Float"
+        },
+        {
+          "name": "white_blood_count",
+          "type": "Float"
+        }
+      ],
+      "rows": [
+        {
+          "patient_id": "P001",
+          "timestamp": "2026-10-31T11:55:00Z",
+          "systolic_bp": 120,
+          "body_temperature": 37,
+          "white_blood_count": 7
+        },
+        {
+          "patient_id": "P002",
+          "timestamp": "2026-10-31T11:55:00Z",
+          "systolic_bp": 85,
+          "body_temperature": 39,
+          "white_blood_count": 16
+        }
+      ]
+    }
+  ]
+}

@@ -8,4 +8,5 @@ rule HighGlucoseAlert:
     when glucose_data.latest > threshold:
     then:
         alert: "High glucose detected", "WARNING"
-end
+    end when
+end rule

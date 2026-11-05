@@ -135,9 +135,9 @@ static bool test_lexer_error_detection(void) {
     return true;
 }
 
-static bool test_parser_valid_minimal(void) {
+static bool test_string_validation(const char *source, bool expect_valid) {
     SourceBuffer src;
-    source_from_string("min", "rule Minimal: end", &src);
+    source_from_string("test_inline", source, &src);
 
     DiagnosticEngine diag;
     diag_init(&diag, &src, NULL);
@@ -149,43 +149,118 @@ static bool test_parser_valid_minimal(void) {
 
     Parser parser;
     parser_init(&parser, &tokens, &diag);
-    bool parsed = parser_parse(&parser);
+    parser_parse(&parser);
 
-    TEST_ASSERT(parsed, "minimal rule parsed");
-    TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
+    bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
 
     diag_free(&diag);
     token_list_free(&tokens);
     source_free(&src);
-    return true;
+
+    return is_valid == expect_valid;
+}
+
+static bool test_parser_valid_minimal(void) {
+    return test_string_validation("rule Minimal: end rule", true);
 }
 
 static bool test_parser_boolean_precedence(void) {
-    SourceBuffer src;
-    source_from_string("bool",
+    return test_string_validation(
         "rule BoolPrecedence:\n"
         "    when not a and b or c then alert: \"OK\"\n"
-        "end\n", &src);
+        "    end when\n"
+        "end rule\n", true);
+}
 
-    DiagnosticEngine diag;
-    diag_init(&diag, &src, NULL);
+/* HELIX-15: Block terminator test cases */
+static bool test_parser_valid_bind(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    bind g = Labs.glucose\n"
+        "    end bind\n"
+        "end rule\n", true);
+}
 
-    Lexer lexer;
-    lexer_init(&lexer, &src, &diag);
-    TokenList tokens;
-    lexer_tokenize_all(&lexer, &tokens);
+static bool test_parser_valid_when(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n"
+        "    end when\n"
+        "end rule\n", true);
+}
 
-    Parser parser;
-    parser_init(&parser, &tokens, &diag);
-    bool parsed = parser_parse(&parser);
+static bool test_parser_valid_nested(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    bind g = Labs.glucose\n"
+        "    end bind\n"
+        "    when g.latest > 1 then\n"
+        "        when g.latest > 2 then\n"
+        "            alert: \"high\"\n"
+        "        end when\n"
+        "    otherwise:\n"
+        "        suppress: within 1 hours\n"
+        "    end when\n"
+        "end rule\n", true);
+}
 
-    TEST_ASSERT(parsed, "boolean precedence expression parsed");
-    TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
+static bool test_parser_invalid_standalone_end(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    let x := 1\n"
+        "end\n", false);
+}
 
-    diag_free(&diag);
-    token_list_free(&tokens);
-    source_free(&src);
-    return true;
+static bool test_parser_invalid_mismatched_bind(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    bind g = Labs.glucose\n"
+        "    end rule\n"
+        "end rule\n", false);
+}
+
+static bool test_parser_invalid_mismatched_when(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n"
+        "    end bind\n"
+        "end rule\n", false);
+}
+
+static bool test_parser_invalid_unknown_descriptor(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    let x := 1\n"
+        "end unknown\n", false);
+}
+
+static bool test_parser_invalid_missing_descriptor(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n"
+        "    end\n"
+        "end rule\n", false);
+}
+
+static bool test_parser_invalid_missing_closing_at_eof(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n", false);
+}
+
+static bool test_parser_invalid_incorrect_nesting(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        when b > 1 then\n"
+        "            alert: \"ok\"\n"
+        "        end rule\n"
+        "    end when\n"
+        "end when\n", false);
 }
 
 /* Helper to validate a file path */
@@ -273,6 +348,16 @@ int main(void) {
     run_test("Unit: Lexer Error Detection", test_lexer_error_detection);
     run_test("Unit: Parser Minimal Rule", test_parser_valid_minimal);
     run_test("Unit: Parser Boolean Precedence", test_parser_boolean_precedence);
+    run_test("Unit: Block end bind (valid)", test_parser_valid_bind);
+    run_test("Unit: Block end when (valid)", test_parser_valid_when);
+    run_test("Unit: Block nested blocks (valid)", test_parser_valid_nested);
+    run_test("Unit: Standalone end error (invalid)", test_parser_invalid_standalone_end);
+    run_test("Unit: Mismatched end rule on bind (invalid)", test_parser_invalid_mismatched_bind);
+    run_test("Unit: Mismatched end bind on when (invalid)", test_parser_invalid_mismatched_when);
+    run_test("Unit: Unknown block descriptor (invalid)", test_parser_invalid_unknown_descriptor);
+    run_test("Unit: Missing block descriptor (invalid)", test_parser_invalid_missing_descriptor);
+    run_test("Unit: Missing closing at EOF (invalid)", test_parser_invalid_missing_closing_at_eof);
+    run_test("Unit: Incorrect block nesting (invalid)", test_parser_invalid_incorrect_nesting);
 
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);

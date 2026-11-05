@@ -23,10 +23,10 @@ export const keywords = [
   "end",
 ];
 const docs: Record<string, string> = {
-  rule: "Declare a named rule terminated by end",
-  bind: "Map a series to a table column, optionally filtered by where and within",
+  rule: "Declare a named rule terminated by end rule",
+  bind: "Map a series to a table column, optionally filtered by where and within, terminated by end bind",
   source: "Select a local table or describe source-system metadata",
-  when: "Run then for TRUE, otherwise for FALSE; UNKNOWN executes neither",
+  when: "Run then for TRUE, otherwise for FALSE, terminated by end when; UNKNOWN executes neither",
   latest:
     "Select the latest eligible patient reading using the evaluation timestamp",
   within: "Restrict readings to an inclusive time window",
@@ -125,7 +125,7 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
                   label: "rule template",
                   kind: monaco.languages.CompletionItemKind.Snippet,
                   insertText:
-                    'rule ${1:RuleName}:\n    source ${2:glucose_data}\n    when ${2:glucose_data}.latest > ${3:250} then\n        alert: "${4:High reading}", "WARNING"\nend',
+                    'rule ${1:RuleName}:\n    source ${2:glucose_data}\n    when ${2:glucose_data}.latest > ${3:250} then\n        alert: "${4:High reading}", "WARNING"\n    end when\nend rule',
                   insertTextRules:
                     monaco.languages.CompletionItemInsertTextRule
                       .InsertAsSnippet,
@@ -135,7 +135,7 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
                   label: "when / otherwise",
                   kind: monaco.languages.CompletionItemKind.Snippet,
                   insertText:
-                    'when ${1:reading}.latest > ${2:250} then\n    alert: "${3:High reading}"\notherwise\n    suppress: within ${4:1} hours',
+                    'when ${1:reading}.latest > ${2:250} then\n    alert: "${3:High reading}"\notherwise\n    suppress: within ${4:1} hours\nend when',
                   insertTextRules:
                     monaco.languages.CompletionItemInsertTextRule
                       .InsertAsSnippet,
@@ -145,7 +145,7 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
                   label: "filtered binding",
                   kind: monaco.languages.CompletionItemKind.Snippet,
                   insertText:
-                    'bind ${1:readings} = ${2:Vitals.heart_rate} where status == "final" within ${3:30} minutes',
+                    'bind ${1:readings} = ${2:Vitals.heart_rate} where status == "final" within ${3:30} minutes end bind',
                   insertTextRules:
                     monaco.languages.CompletionItemInsertTextRule
                       .InsertAsSnippet,

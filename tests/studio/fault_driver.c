@@ -16,8 +16,8 @@ int main(int argc, char **argv) {
     counter = atoi(argv[2]);
     char *result =
         strcmp(argv[1], "analyze") == 0
-            ? helix_analyze("rule X: end")
-            : helix_evaluate("rule X: source t when t.latest > 1 then alert \"a\" end",
+            ? helix_analyze("rule X: end rule")
+            : helix_evaluate("rule X: source t when t.latest > 1 then alert \"a\" end when end rule",
                              "{\"evaluationTime\":\"2026-10-31T12:00:00Z\",\"tables\":[{\"name\":"
                              "\"t\",\"columns\":[{\"name\":\"patient_id\",\"type\":\"String\"},{"
                              "\"name\":\"timestamp\",\"type\":\"DateTime\"},{\"name\":\"value\","

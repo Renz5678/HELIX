@@ -307,7 +307,7 @@ export default function App() {
             title="New file"
             onClick={() =>
               replaceFile(
-                "rule NewRule:\n    source glucose_data\nend\n",
+                "rule NewRule:\n    source glucose_data\nend rule\n",
                 "untitled.helix",
               )
             }

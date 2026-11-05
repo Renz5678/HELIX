@@ -5,6 +5,7 @@ rule RecentTachycardiaRule:
     site: Cardiology
 
     bind hr_readings = Vitals.heart_rate where status == "final" within 30 minutes
+    end bind
 
     let max_hr := 120
 
@@ -12,4 +13,5 @@ rule RecentTachycardiaRule:
     then:
         alert: "Recent Tachycardia Observed", hr_readings.latest
         suppress: within 1 hours
-end
+    end when
+end rule

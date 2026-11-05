@@ -37,7 +37,7 @@ int main(void) {
     assert(!value_datetime("2026-01-01T10:00:60Z", &a));
     SourceBuffer source = {0};
     assert(
-        source_from_string("test", "rule X: when not a and b or c then alert \"x\" end", &source));
+        source_from_string("test", "rule X: when not a and b or c then alert \"x\" end when end rule", &source));
     DiagnosticEngine diag;
     diag_init(&diag, &source, NULL);
     Lexer lexer;
@@ -63,7 +63,7 @@ int main(void) {
         "\"timestamp\":\"2026-10-31T11:00:00Z\",\"value\":275}]}]}";
     for (int i = 0; i < 500; i++) {
         char *response = helix_evaluate(
-            "rule X: source T when T.latest > 250 then alert \"high\" suppress within 1 hours end",
+            "rule X: source T when T.latest > 250 then alert \"high\" suppress within 1 hours end when end rule",
             payload);
         assert(response);
         char error[128];
@@ -75,11 +75,11 @@ int main(void) {
         assert(json_get(results->children[0], "actions")->count == 2);
         json_value_free(json);
         helix_free_result(response);
-        response = helix_analyze("rule X: @ let x = end");
+        response = helix_analyze("rule X: @ let x = end rule");
         assert(response);
         helix_free_result(response);
         response =
-            helix_evaluate("rule X: source T when T.latest > 0 then alert \"x\" end", "{bad");
+            helix_evaluate("rule X: source T when T.latest > 0 then alert \"x\" end when end rule", "{bad");
         assert(response);
         helix_free_result(response);
     }

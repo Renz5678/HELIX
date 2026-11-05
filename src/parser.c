@@ -85,6 +85,61 @@ static bool consume_tok(Parser *parser, TokenType type, const char *msg) {
     return false;
 }
 
+static Token peek_next_tok(const Parser *parser) {
+    if (!parser->tokens || parser->current + 1 >= parser->tokens->count) {
+        return (Token){ .type = TOKEN_EOF, .lexeme = "" };
+    }
+    return parser->tokens->items[parser->current + 1];
+}
+
+static bool is_block_descriptor(TokenType t) {
+    return (t == TOKEN_KW_RULE || t == TOKEN_KW_BIND || t == TOKEN_KW_WHEN);
+}
+
+static bool consume_block_end(Parser *parser, TokenType expected_kw, const char *block_name) {
+    if (!check_tok(parser, TOKEN_KW_END)) {
+        const char *got = peek_tok(parser).type == TOKEN_EOF ? "end of file" : peek_tok(parser).lexeme;
+        error_at_current(parser, "Expected 'end %s' to terminate %s block. Got '%s'",
+                         block_name, block_name, got);
+        return false;
+    }
+
+    Token end_tok = peek_tok(parser);
+    Token next_tok = peek_next_tok(parser);
+
+    bool is_new_rule_decl = (next_tok.type == TOKEN_KW_RULE &&
+                             next_tok.line > end_tok.line &&
+                             parser->current + 2 < parser->tokens->count &&
+                             parser->tokens->items[parser->current + 2].type == TOKEN_IDENTIFIER);
+
+    bool is_missing_descriptor = (next_tok.type == TOKEN_EOF ||
+                                  next_tok.type == TOKEN_KW_END ||
+                                  (next_tok.line > end_tok.line && (!is_block_descriptor(next_tok.type) || is_new_rule_decl)));
+
+    if (is_missing_descriptor) {
+        error_at_current(parser, "Missing block descriptor after 'end': expected 'end %s'", block_name);
+        return false;
+    }
+
+    if (next_tok.type == expected_kw) {
+        advance_tok(parser); /* Consume 'end' */
+        advance_tok(parser); /* Consume descriptor */
+        return true;
+    }
+
+    if (is_block_descriptor(next_tok.type)) {
+        advance_tok(parser); /* Move to descriptor token so error is anchored at it */
+        error_at_current(parser, "Mismatched block terminator 'end %s': expected 'end %s'",
+                         peek_tok(parser).lexeme, block_name);
+        return false;
+    }
+
+    advance_tok(parser); /* Move to unknown descriptor token so error is anchored at it */
+    error_at_current(parser, "Unknown block descriptor '%s' after 'end': expected 'end %s'",
+                     peek_tok(parser).lexeme, block_name);
+    return false;
+}
+
 /* Panic-mode synchronization to recover from syntax errors */
 static void synchronize(Parser *parser) {
     parser->panic_mode = false;
@@ -1050,7 +1105,7 @@ static bool impl_parse_bind_decl(Parser *parser) {
         if (!parse_within_clause(parser))
             return false;
     }
-    return true;
+    return consume_block_end(parser, TOKEN_KW_BIND, "bind");
 }
 
 static bool impl_parse_let_decl(Parser *parser) {
@@ -1172,7 +1227,7 @@ static bool impl_parse_when_stmt(Parser *parser) {
         }
     }
 
-    return true;
+    return consume_block_end(parser, TOKEN_KW_WHEN, "when");
 }
 
 static bool is_rule_element_start(TokenType t) {
@@ -1229,11 +1284,7 @@ static bool impl_parse_rule_decl(Parser *parser) {
         }
     }
 
-    if (!consume_tok(parser, TOKEN_KW_END, "Expected 'end' to terminate rule declaration")) {
-        return false;
-    }
-
-    return true;
+    return consume_block_end(parser, TOKEN_KW_RULE, "rule");
 }
 
 bool parser_parse(Parser *parser) {

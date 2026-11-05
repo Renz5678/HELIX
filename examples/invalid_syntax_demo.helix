@@ -3,4 +3,5 @@ rule DiagnosticDemo:
     let threshold := @
     when glucose_data.latest > then
         alert: "Broken condition"
-end
+    end when
+end rule

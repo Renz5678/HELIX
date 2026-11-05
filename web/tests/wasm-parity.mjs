@@ -14,6 +14,6 @@ try{
   for(const kind of ['analyze','evaluate']){const native=JSON.parse(execFileSync('python3',[resolve(root,'scripts/native_response.py'),resolve(root,'build/native/libhelix.so'),kind,sourceFile,...(kind==='evaluate'?[dataFile]:[])],{encoding:'utf8'}));const wasm=call(kind,source,json);assert.deepEqual(wasm,native,`${name}/${kind} differs`);if(name!=='invalid_syntax_demo')assert.equal(wasm.success,true,`${name}/${kind} failed`)}
   console.log(`Native/WASM parity: ${name}`);
  }
- for(let i=0;i<500;i++){assert(call('analyze','rule X: end').success);assert(!call('evaluate','rule X: source absent end','{}').success)}
+ for(let i=0;i<500;i++){assert(call('analyze','rule X: end rule').success);assert(!call('evaluate','rule X: source absent end rule','{}').success)}
  console.log('Five fixtures match native output; 1000 repeated WASM calls completed');
 }finally{rmSync(temporary,{recursive:true,force:true})}

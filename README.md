@@ -138,6 +138,7 @@ rule HighGlucoseAlert:
     source: EHR -> FHIR_R4
 
     bind glucose_data = Labs.glucose
+    end bind
 
     let threshold := 180
 
@@ -146,7 +147,8 @@ rule HighGlucoseAlert:
         alert: "High Blood Glucose Detected", "WARNING"
     otherwise:
         suppress: within 4 hours
-end
+    end when
+end rule
 ```
 
 ### Key Decisions & Grammar Resolutions
@@ -155,6 +157,7 @@ To resolve discrepancies between informal documentation examples and formal defi
 2. **21 Core Reserved Keywords:** The formal 21-keyword list is strictly enforced. Words appearing in informal examples (`if`, `conclude`, `log`) are treated as regular identifiers, avoiding ad-hoc keyword bloat.
 3. **Optional Colons:** Colons following declaration headers (`rule Name:`, `intent:`, `when:`, `then:`, `otherwise:`) are optional to support both idiomatic styles.
 4. **Member Navigation on Keywords (`.latest`):** The property access grammar rule (`primary "." member_name`) contextually accepts keywords like `latest` or `source` after `.`, keeping the scanner context-free.
+5. **Explicit Block-Specific Terminators:** Blocks are explicitly terminated with matching descriptors (`end rule`, `end bind`, `end when`). Generic standalone `end` or mismatched terminators are rejected.
 
 Full formal definitions are available in [docs/grammar.md](docs/grammar.md) and [docs/token_reference.md](docs/token_reference.md).
 

@@ -6,7 +6,7 @@ for mode in ('analyze','evaluate'):
         assert r.returncode==0,(mode,allocation,r.returncode,r.stderr)
         data=json.loads(r.stdout)
         if data is None or not data['success']:continue
-        if mode=='analyze':assert [t['lexeme'] for t in data['tokens']]==['rule','X',':','end',''],(mode,allocation,data)
+        if mode=='analyze':assert [t['lexeme'] for t in data['tokens']]==['rule','X',':','end','rule',''],(mode,allocation,data)
         else:
             assert len(data['results'])==1,(mode,allocation,data)
             assert len(data['results'][0]['conditions'])==1,(mode,allocation,data)

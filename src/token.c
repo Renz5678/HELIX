@@ -13,7 +13,7 @@ static char *duplicate_string(const char *s) {
 }
 
 Token token_create(TokenType type, const char *lexeme, size_t line, size_t column) {
-    Token t;
+    Token t = {0};
     t.type = type;
     t.lexeme = duplicate_string(lexeme ? lexeme : "");
     t.line = line;
@@ -67,6 +67,10 @@ const char *token_type_name(TokenType type) {
         case TOKEN_LT:             return "TOKEN_LT";
         case TOKEN_LTE:            return "TOKEN_LTE";
         case TOKEN_ARROW:          return "TOKEN_ARROW";
+        case TOKEN_PLUS:           return "TOKEN_PLUS";
+        case TOKEN_MINUS:          return "TOKEN_MINUS";
+        case TOKEN_STAR:           return "TOKEN_STAR";
+        case TOKEN_SLASH:          return "TOKEN_SLASH";
 
         case TOKEN_COLON:          return "TOKEN_COLON";
         case TOKEN_DOT:            return "TOKEN_DOT";
@@ -120,6 +124,10 @@ const char *token_type_description(TokenType type) {
         case TOKEN_LT:             return "'<'";
         case TOKEN_LTE:            return "'<='";
         case TOKEN_ARROW:          return "'->'";
+        case TOKEN_PLUS:           return "'+'";
+        case TOKEN_MINUS:          return "'-'";
+        case TOKEN_STAR:           return "'*'";
+        case TOKEN_SLASH:          return "'/'";
 
         case TOKEN_COLON:          return "':'";
         case TOKEN_DOT:            return "'.'";

@@ -3,4 +3,5 @@ rule MissingExpr:
     when glucose_data.latest >
     then:
         alert: "High"
-end
+    end when
+end rule

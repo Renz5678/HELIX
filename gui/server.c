@@ -142,7 +142,9 @@ static const char *token_kind(TokenType t) {
         case TOKEN_STRING_LIT:  return "string";
         case TOKEN_ASSIGN: case TOKEN_EQUAL: case TOKEN_EQ: case TOKEN_NEQ:
         case TOKEN_GT: case TOKEN_GTE: case TOKEN_LT: case TOKEN_LTE:
-        case TOKEN_ARROW:       return "operator";
+        case TOKEN_ARROW:
+        case TOKEN_PLUS: case TOKEN_MINUS: case TOKEN_STAR: case TOKEN_SLASH:
+                                return "operator";
         case TOKEN_COLON: case TOKEN_DOT: case TOKEN_COMMA:
         case TOKEN_LPAREN: case TOKEN_RPAREN:
         case TOKEN_LBRACKET: case TOKEN_RBRACKET: return "delimiter";

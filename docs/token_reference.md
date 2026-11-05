@@ -30,7 +30,7 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_KW_ALERT` | `alert` | Alert action statement | `alert: "Severe Hyperglycemia", "CRITICAL"` |
 | `TOKEN_KW_SUPPRESS` | `suppress` | Alert suppression statement | `suppress: within 6 hours` |
 | `TOKEN_KW_OTHERWISE`| `otherwise` | Alternative branch in `when` | `otherwise let status := "normal"` |
-| `TOKEN_KW_END` | `end` | Rule block terminator | `end` |
+| `TOKEN_KW_END` | `end` | Block terminator keyword | `end rule`, `end bind`, `end when` |
 
 ---
 
@@ -67,6 +67,10 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_LT` | `<` | Less-than comparison | Comparison level |
 | `TOKEN_LTE` | `<=` | Less-than-or-equal comparison | Comparison level |
 | `TOKEN_ARROW` | `->` | Directional source mapping operator | Postfix / declaration |
+| `TOKEN_PLUS` | `+` | Addition arithmetic operator | Lexical level |
+| `TOKEN_MINUS` | `-` | Subtraction arithmetic operator | Lexical level |
+| `TOKEN_STAR` | `*` | Multiplication arithmetic operator | Lexical level |
+| `TOKEN_SLASH` | `/` | Division arithmetic operator | Lexical level |
 
 ---
 

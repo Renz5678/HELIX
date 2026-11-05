@@ -53,6 +53,7 @@ bool source_load(const char *path, SourceBuffer *out) {
 bool source_from_string(const char *name, const char *str, SourceBuffer *out) {
     if (!str || !out) return false;
     out->filename = duplicate_string(name ? name : "<string>");
+    if (!out->filename) { out->content=NULL; out->length=0; return false; }
     size_t len = strlen(str);
     out->content = (char *)malloc(len + 1);
     if (!out->content) {
@@ -95,8 +96,8 @@ bool source_get_line(const SourceBuffer *src, size_t line_num, const char **line
     }
 
     if (cur_line == line_num && p >= start) {
-        *line_start = start;
-        *line_len = (size_t)(p - start);
+        *line_start = p;
+        *line_len = 0;
         return true;
     }
 

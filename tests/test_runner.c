@@ -77,6 +77,7 @@ static bool test_lexer_basic_tokens(void) {
     TEST_ASSERT(tokens.items[7].type == TOKEN_KW_END, "token 7 is end");
     TEST_ASSERT(tokens.items[8].type == TOKEN_EOF, "token 8 is EOF");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     diag_free(&diag);
     source_free(&src);
@@ -108,6 +109,7 @@ static bool test_lexer_operators_and_positions(void) {
     TEST_ASSERT(tokens.items[7].type == TOKEN_LT, "<");
     TEST_ASSERT(tokens.items[8].type == TOKEN_GT, ">");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     diag_free(&diag);
     source_free(&src);
@@ -129,63 +131,139 @@ static bool test_lexer_error_detection(void) {
     TEST_ASSERT(!ok, "lexer reports errors");
     TEST_ASSERT(diag.lexical_errors >= 3, "detected at least 3 lexical errors");
 
+    diag_free(&diag);
     token_list_free(&tokens);
     diag_free(&diag);
     source_free(&src);
     return true;
+}
+
+static bool test_string_validation(const char *source, bool expect_valid) {
+    SourceBuffer src;
+    source_from_string("test_inline", source, &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+    TokenList tokens;
+    lexer_tokenize_all(&lexer, &tokens);
+
+    Parser parser;
+    parser_init(&parser, &tokens, &diag);
+    parser_parse(&parser);
+
+    bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
+
+    diag_free(&diag);
+    token_list_free(&tokens);
+    source_free(&src);
+
+    return is_valid == expect_valid;
 }
 
 static bool test_parser_valid_minimal(void) {
-    SourceBuffer src;
-    source_from_string("min", "rule Minimal: end", &src);
-
-    DiagnosticEngine diag;
-    diag_init(&diag, &src, NULL);
-
-    Lexer lexer;
-    lexer_init(&lexer, &src, &diag);
-    TokenList tokens;
-    lexer_tokenize_all(&lexer, &tokens);
-
-    Parser parser;
-    parser_init(&parser, &tokens, &diag);
-    bool parsed = parser_parse(&parser);
-
-    TEST_ASSERT(parsed, "minimal rule parsed");
-    TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
-
-    token_list_free(&tokens);
-    diag_free(&diag);
-    source_free(&src);
-    return true;
+    return test_string_validation("rule Minimal: end rule", true);
 }
 
 static bool test_parser_boolean_precedence(void) {
-    SourceBuffer src;
-    source_from_string("bool",
+    return test_string_validation(
         "rule BoolPrecedence:\n"
         "    when not a and b or c then alert: \"OK\"\n"
-        "end\n", &src);
+        "    end when\n"
+        "end rule\n", true);
+}
 
-    DiagnosticEngine diag;
-    diag_init(&diag, &src, NULL);
+/* HELIX-15: Block terminator test cases */
+static bool test_parser_valid_bind(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    bind g = Labs.glucose\n"
+        "    end bind\n"
+        "end rule\n", true);
+}
 
-    Lexer lexer;
-    lexer_init(&lexer, &src, &diag);
-    TokenList tokens;
-    lexer_tokenize_all(&lexer, &tokens);
+static bool test_parser_valid_when(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n"
+        "    end when\n"
+        "end rule\n", true);
+}
 
-    Parser parser;
-    parser_init(&parser, &tokens, &diag);
-    bool parsed = parser_parse(&parser);
+static bool test_parser_valid_nested(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    bind g = Labs.glucose\n"
+        "    end bind\n"
+        "    when g.latest > 1 then\n"
+        "        when g.latest > 2 then\n"
+        "            alert: \"high\"\n"
+        "        end when\n"
+        "    otherwise:\n"
+        "        suppress: within 1 hours\n"
+        "    end when\n"
+        "end rule\n", true);
+}
 
-    TEST_ASSERT(parsed, "boolean precedence expression parsed");
-    TEST_ASSERT(diag.syntax_errors == 0, "no syntax errors");
+static bool test_parser_invalid_standalone_end(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    let x := 1\n"
+        "end\n", false);
+}
 
-    token_list_free(&tokens);
-    diag_free(&diag);
-    source_free(&src);
-    return true;
+static bool test_parser_invalid_mismatched_bind(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    bind g = Labs.glucose\n"
+        "    end rule\n"
+        "end rule\n", false);
+}
+
+static bool test_parser_invalid_mismatched_when(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n"
+        "    end bind\n"
+        "end rule\n", false);
+}
+
+static bool test_parser_invalid_unknown_descriptor(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    let x := 1\n"
+        "end unknown\n", false);
+}
+
+static bool test_parser_invalid_missing_descriptor(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n"
+        "    end\n"
+        "end rule\n", false);
+}
+
+static bool test_parser_invalid_missing_closing_at_eof(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        alert: \"ok\"\n", false);
+}
+
+static bool test_parser_invalid_incorrect_nesting(void) {
+    return test_string_validation(
+        "rule R:\n"
+        "    when a > 1 then\n"
+        "        when b > 1 then\n"
+        "            alert: \"ok\"\n"
+        "        end rule\n"
+        "    end when\n"
+        "end when\n", false);
 }
 
 /* --- Diagnostic recording tests (structured messages & exact positions) --- */
@@ -288,6 +366,10 @@ static bool is_expected_single(TokenType got, int c) {
         case ')':  return got == TOKEN_RPAREN;
         case '[':  return got == TOKEN_LBRACKET;
         case ']':  return got == TOKEN_RBRACKET;
+        case '+':  return got == TOKEN_PLUS;
+        case '-':  return got == TOKEN_MINUS;
+        case '*':  return got == TOKEN_STAR;
+        case '/':  return got == TOKEN_SLASH;
         case '=':  return got == TOKEN_EQUAL;
         case '<':  return got == TOKEN_LT;
         case '>':  return got == TOKEN_GT;
@@ -347,6 +429,7 @@ static bool test_file_validation(const char *path, bool expect_valid) {
 
     bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
 
+    diag_free(&diag);
     token_list_free(&tokens);
     diag_free(&diag);
     source_free(&src);
@@ -403,20 +486,31 @@ static bool test_fixture_syn_missing_expression(void) {
 static bool test_parse_string(const char *source, bool expect_valid) {
     SourceBuffer src;
     source_from_string("test_inline", source, &src);
+/* --- HELIX-38 Unit Tests: Arithmetic Operators --- */
+
+static bool check_tokens(const char *input, size_t expected_count, const TokenType *expected_types, const char **expected_lexemes) {
+    SourceBuffer src;
+    source_from_string("h38_test", input, &src);
 
     DiagnosticEngine diag;
     diag_init(&diag, &src, NULL);
 
     Lexer lexer;
     lexer_init(&lexer, &src, &diag);
+
     TokenList tokens;
-    lexer_tokenize_all(&lexer, &tokens);
+    bool ok = lexer_tokenize_all(&lexer, &tokens);
 
-    Parser parser;
-    parser_init(&parser, &tokens, &diag);
-    parser_parse(&parser);
+    TEST_ASSERT(ok, "lexer tokenized cleanly without errors");
+    TEST_ASSERT(diag.lexical_errors == 0, "zero lexical errors");
+    TEST_ASSERT(tokens.count == expected_count, "token count matches expected");
 
-    bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
+    for (size_t i = 0; i < expected_count; i++) {
+        TEST_ASSERT(tokens.items[i].type == expected_types[i], "token type matches");
+        if (expected_lexemes && expected_lexemes[i]) {
+            TEST_ASSERT(strcmp(tokens.items[i].lexeme, expected_lexemes[i]) == 0, "token lexeme matches");
+        }
+    }
 
     token_list_free(&tokens);
     diag_free(&diag);
@@ -538,6 +632,171 @@ static bool test_fixture_syn_incomplete_latest_query(void) {
 
 static bool test_fixture_syn_invalid_time_unit(void) {
     return test_file_validation("tests/invalid/syn_invalid_time_unit.helix", false);
+    return true;
+}
+
+static bool test_helix38_basic_arithmetic(void) {
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_PLUS, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "1", "+", "2", "" };
+        TEST_ASSERT(check_tokens("1 + 2", 4, types, lexemes), "1 + 2 recognized");
+    }
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_MINUS, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "5", "-", "3", "" };
+        TEST_ASSERT(check_tokens("5 - 3", 4, types, lexemes), "5 - 3 recognized");
+    }
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_STAR, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "4", "*", "2", "" };
+        TEST_ASSERT(check_tokens("4 * 2", 4, types, lexemes), "4 * 2 recognized");
+    }
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_SLASH, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "8", "/", "2", "" };
+        TEST_ASSERT(check_tokens("8 / 2", 4, types, lexemes), "8 / 2 recognized");
+    }
+    return true;
+}
+
+static bool test_helix38_spacing_and_expressions(void) {
+    /* A+B without spaces */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "+", "B", "" };
+        TEST_ASSERT(check_tokens("A+B", 4, types, lexemes), "A+B without spaces");
+    }
+    /* A + B with spaces */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "+", "B", "" };
+        TEST_ASSERT(check_tokens("A + B", 4, types, lexemes), "A + B with spaces");
+    }
+    /* (A + B) * C */
+    {
+        TokenType types[] = { TOKEN_LPAREN, TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_RPAREN, TOKEN_STAR, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "(", "A", "+", "B", ")", "*", "C", "" };
+        TEST_ASSERT(check_tokens("(A + B) * C", 8, types, lexemes), "(A + B) * C");
+    }
+    /* A-5 */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_MINUS, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "A", "-", "5", "" };
+        TEST_ASSERT(check_tokens("A-5", 4, types, lexemes), "A-5 recognized");
+    }
+    /* A*-B */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_STAR, TOKEN_MINUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "*", "-", "B", "" };
+        TEST_ASSERT(check_tokens("A*-B", 5, types, lexemes), "A*-B recognized");
+    }
+    /* A / B + C * D */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_SLASH, TOKEN_IDENTIFIER, TOKEN_PLUS, TOKEN_IDENTIFIER, TOKEN_STAR, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "A", "/", "B", "+", "C", "*", "D", "" };
+        TEST_ASSERT(check_tokens("A / B + C * D", 8, types, lexemes), "A / B + C * D recognized");
+    }
+    return true;
+}
+
+static bool test_helix38_jira_reproduction(void) {
+    /* Jira Example 1: let severe_threshold = 250 + 3 */
+    {
+        TokenType types[] = {
+            TOKEN_KW_LET, TOKEN_IDENTIFIER, TOKEN_EQUAL, TOKEN_INT_LIT, TOKEN_PLUS, TOKEN_INT_LIT, TOKEN_EOF
+        };
+        const char *lexemes[] = {
+            "let", "severe_threshold", "=", "250", "+", "3", ""
+        };
+        TEST_ASSERT(check_tokens("let severe_threshold = 250 + 3", 7, types, lexemes),
+                    "Jira example 1: let severe_threshold = 250 + 3");
+    }
+    /* Jira Example 2: let A := (B + 3) * G / 24 */
+    {
+        TokenType types[] = {
+            TOKEN_KW_LET, TOKEN_IDENTIFIER, TOKEN_ASSIGN, TOKEN_LPAREN, TOKEN_IDENTIFIER, TOKEN_PLUS,
+            TOKEN_INT_LIT, TOKEN_RPAREN, TOKEN_STAR, TOKEN_IDENTIFIER, TOKEN_SLASH, TOKEN_INT_LIT, TOKEN_EOF
+        };
+        const char *lexemes[] = {
+            "let", "A", ":=", "(", "B", "+", "3", ")", "*", "G", "/", "24", ""
+        };
+        TEST_ASSERT(check_tokens("let A := (B + 3) * G / 24", 13, types, lexemes),
+                    "Jira example 2: let A := (B + 3) * G / 24");
+    }
+    return true;
+}
+
+static bool test_helix38_edge_cases(void) {
+    /* Existing assignment operators preserved */
+    {
+        TokenType types1[] = { TOKEN_IDENTIFIER, TOKEN_EQUAL, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes1[] = { "A", "=", "10", "" };
+        TEST_ASSERT(check_tokens("A = 10", 4, types1, lexemes1), "A = 10 preserved");
+
+        TokenType types2[] = { TOKEN_IDENTIFIER, TOKEN_ASSIGN, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes2[] = { "A", ":=", "10", "" };
+        TEST_ASSERT(check_tokens("A := 10", 4, types2, lexemes2), "A := 10 preserved");
+    }
+    /* Disambiguation: -> vs - */
+    {
+        TokenType types[] = { TOKEN_IDENTIFIER, TOKEN_ARROW, TOKEN_IDENTIFIER, TOKEN_MINUS, TOKEN_IDENTIFIER, TOKEN_EOF };
+        const char *lexemes[] = { "a", "->", "b", "-", "c", "" };
+        TEST_ASSERT(check_tokens("a -> b - c", 6, types, lexemes), "arrow vs minus disambiguation");
+    }
+    /* Consecutive operators: + - * / -- ++ // / * * / */
+    {
+        TokenType types[] = {
+            TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH,
+            TOKEN_MINUS, TOKEN_MINUS,
+            TOKEN_PLUS, TOKEN_PLUS,
+            TOKEN_SLASH, TOKEN_SLASH,
+            TOKEN_SLASH, TOKEN_STAR,
+            TOKEN_STAR, TOKEN_SLASH,
+            TOKEN_EOF
+        };
+        TEST_ASSERT(check_tokens("+-*/ -- ++ // /* */", 15, types, NULL), "consecutive operators");
+    }
+    /* Slash and comments */
+    {
+        TokenType types[] = { TOKEN_INT_LIT, TOKEN_SLASH, TOKEN_INT_LIT, TOKEN_EOF };
+        const char *lexemes[] = { "8", "/", "2", "" };
+        TEST_ASSERT(check_tokens("8 / 2 # comment with + - * /", 4, types, lexemes), "slash before comment");
+    }
+    /* Operators at EOF boundary */
+    {
+        TokenType t_plus[] = { TOKEN_INT_LIT, TOKEN_PLUS, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("1 +", 3, t_plus, NULL), "plus at EOF");
+
+        TokenType t_minus[] = { TOKEN_INT_LIT, TOKEN_MINUS, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("5 -", 3, t_minus, NULL), "minus at EOF");
+
+        TokenType t_star[] = { TOKEN_INT_LIT, TOKEN_STAR, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("4 *", 3, t_star, NULL), "star at EOF");
+
+        TokenType t_slash[] = { TOKEN_INT_LIT, TOKEN_SLASH, TOKEN_EOF };
+        TEST_ASSERT(check_tokens("8 /", 3, t_slash, NULL), "slash at EOF");
+    }
+    /* Negative test: invalid characters still error out */
+    {
+        SourceBuffer src;
+        source_from_string("bad_ops", "let x := 10 @ 5 $ 2 ! 3", &src);
+
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+
+        TokenList tokens;
+        bool ok = lexer_tokenize_all(&lexer, &tokens);
+        TEST_ASSERT(!ok, "errors reported for invalid characters");
+        TEST_ASSERT(diag.lexical_errors >= 3, "at least 3 lexical errors for @, $, !");
+
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+    return true;
 }
 
 int main(void) {
@@ -556,6 +815,20 @@ int main(void) {
     run_test("Unit: Parser Diagnostic Content", test_diag_syntax_message_content);
     run_test("Unit: CRLF Position Tracking", test_crlf_position_tracking);
     run_test("Unit: Exhaustive ASCII Sweep", test_exhaustive_single_char_sweep);
+    run_test("Unit: Block end bind (valid)", test_parser_valid_bind);
+    run_test("Unit: Block end when (valid)", test_parser_valid_when);
+    run_test("Unit: Block nested blocks (valid)", test_parser_valid_nested);
+    run_test("Unit: Standalone end error (invalid)", test_parser_invalid_standalone_end);
+    run_test("Unit: Mismatched end rule on bind (invalid)", test_parser_invalid_mismatched_bind);
+    run_test("Unit: Mismatched end bind on when (invalid)", test_parser_invalid_mismatched_when);
+    run_test("Unit: Unknown block descriptor (invalid)", test_parser_invalid_unknown_descriptor);
+    run_test("Unit: Missing block descriptor (invalid)", test_parser_invalid_missing_descriptor);
+    run_test("Unit: Missing closing at EOF (invalid)", test_parser_invalid_missing_closing_at_eof);
+    run_test("Unit: Incorrect block nesting (invalid)", test_parser_invalid_incorrect_nesting);
+    run_test("HELIX-38: Basic Arithmetic Operators", test_helix38_basic_arithmetic);
+    run_test("HELIX-38: Spacing and Expressions", test_helix38_spacing_and_expressions);
+    run_test("HELIX-38: Jira Reproduction Snippets", test_helix38_jira_reproduction);
+    run_test("HELIX-38: Edge Cases and Invariants", test_helix38_edge_cases);
 
     /* HELIX-17 Unit Tests */
     run_test("HELIX-17: Valid Latest Observation Query", test_helix17_valid_latest_query_multiline);

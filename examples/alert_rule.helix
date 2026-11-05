@@ -5,8 +5,11 @@ rule SepsisEarlyWarningRule:
     terminology: SNOMED("91302008")
 
     bind sbp = Vitals.systolic_bp
+    end bind
     bind temp = Vitals.body_temperature
+    end bind
     bind wbc = Labs.white_blood_count
+    end bind
 
     let sbp_crit := 90
     let temp_high := 38.3
@@ -18,4 +21,5 @@ rule SepsisEarlyWarningRule:
         suppress: within 6 hours
     otherwise:
         let observation_status := "monitoring"
-end
+    end when
+end rule

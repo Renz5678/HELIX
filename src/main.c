@@ -117,6 +117,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    diag_free(&diag);
     token_list_free(&tokens);
     source_free(&source);
 

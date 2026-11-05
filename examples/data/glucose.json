@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "evaluationTime": "2026-10-31T12:00:00Z",
+  "Bindings": {},
+  "tables": [
+    {
+      "name": "glucose_data",
+      "patientIdColumn": "patient_id",
+      "timestampColumn": "timestamp",
+      "defaultValueColumn": "value",
+      "columns": [
+        {
+          "name": "patient_id",
+          "type": "String"
+        },
+        {
+          "name": "timestamp",
+          "type": "DateTime"
+        },
+        {
+          "name": "value",
+          "type": "Float"
+        }
+      ],
+      "rows": [
+        {
+          "patient_id": "P001",
+          "value": 180,
+          "timestamp": "2026-10-31T08:00:00Z"
+        },
+        {
+          "patient_id": "P002",
+          "value": 275,
+          "timestamp": "2026-10-31T09:00:00Z"
+        },
+        {
+          "patient_id": "P003",
+          "value": 310,
+          "timestamp": "2026-10-31T10:00:00Z"
+        }
+      ]
+    }
+  ]
+}

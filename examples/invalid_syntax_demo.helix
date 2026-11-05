@@ -1,0 +1,7 @@
+rule DiagnosticDemo:
+    source glucose_data
+    let threshold := @
+    when glucose_data.latest > then
+        alert: "Broken condition"
+    end when
+end rule

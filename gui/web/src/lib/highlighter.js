@@ -99,8 +99,12 @@ export function highlight(code, opts = {}) {
       i += 2;
       continue;
     }
-    if (c === '=' || c === '<' || c === '>') { out += span('k-operator', c); i++; continue; }
-    if (c === '!' || c === '-') { out += span('k-error', c); i++; continue; } /* lone ! and - are errors */
+    if (c === '=' || c === '<' || c === '>' || c === '+' || c === '-' || c === '*' || c === '/') {
+      out += span('k-operator', c);
+      i++;
+      continue;
+    }
+    if (c === '!') { out += span('k-error', c); i++; continue; } /* lone ! is error */
 
     /* delimiters */
     if (c === ':' || c === '.' || c === ',' || c === '(' ||

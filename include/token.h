@@ -1,8 +1,8 @@
 #ifndef HELIX_TOKEN_H
 #define HELIX_TOKEN_H
 
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /**
  * All token types recognized by the HELIX language.
@@ -32,10 +32,10 @@ typedef enum {
     TOKEN_KW_END,         /* end */
 
     /* Identifiers & Literals */
-    TOKEN_IDENTIFIER,     /* e.g. glucose_data, patient */
-    TOKEN_INT_LIT,        /* e.g. 100, 42 */
-    TOKEN_FLOAT_LIT,      /* e.g. 37.5, 0.9 */
-    TOKEN_STRING_LIT,     /* e.g. "Critical glucose reading" */
+    TOKEN_IDENTIFIER, /* e.g. glucose_data, patient */
+    TOKEN_INT_LIT,    /* e.g. 100, 42 */
+    TOKEN_FLOAT_LIT,  /* e.g. 37.5, 0.9 */
+    TOKEN_STRING_LIT, /* e.g. "Critical glucose reading" */
 
     /* Operators */
     TOKEN_ASSIGN,         /* := */
@@ -47,19 +47,23 @@ typedef enum {
     TOKEN_LT,             /* < */
     TOKEN_LTE,            /* <= */
     TOKEN_ARROW,          /* -> */
+    TOKEN_PLUS,           /* + */
+    TOKEN_MINUS,          /* - */
+    TOKEN_STAR,           /* * */
+    TOKEN_SLASH,          /* / */
 
     /* Delimiters and Punctuation */
-    TOKEN_COLON,          /* : */
-    TOKEN_DOT,            /* . */
-    TOKEN_COMMA,          /* , */
-    TOKEN_LPAREN,         /* ( */
-    TOKEN_RPAREN,         /* ) */
-    TOKEN_LBRACKET,       /* [ */
-    TOKEN_RBRACKET,       /* ] */
+    TOKEN_COLON,    /* : */
+    TOKEN_DOT,      /* . */
+    TOKEN_COMMA,    /* , */
+    TOKEN_LPAREN,   /* ( */
+    TOKEN_RPAREN,   /* ) */
+    TOKEN_LBRACKET, /* [ */
+    TOKEN_RBRACKET, /* ] */
 
     /* Special Sentinel Tokens */
-    TOKEN_EOF,            /* End of input */
-    TOKEN_ERROR           /* Lexical error token */
+    TOKEN_EOF,  /* End of input */
+    TOKEN_ERROR /* Lexical error token */
 } TokenType;
 
 /**
@@ -67,9 +71,10 @@ typedef enum {
  */
 typedef struct {
     TokenType type;
-    char *lexeme;      /* Heap-allocated null-terminated copy */
-    size_t line;       /* 1-indexed */
-    size_t column;     /* 1-indexed */
+    size_t start_offset, end_offset; /* Original UTF-8 byte range, end exclusive */
+    char *lexeme;                    /* Heap-allocated null-terminated copy */
+    size_t line;                     /* 1-indexed */
+    size_t column;                   /* 1-indexed */
 } Token;
 
 /**

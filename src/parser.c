@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 void parser_init(Parser *parser, const TokenList *tokens, DiagnosticEngine *diag) {
     if (!parser) return;
@@ -428,6 +429,15 @@ static bool parse_suppress_stmt(Parser *parser) {
         return parse_within_clause(parser);
     }
     if (match_tok(parser, TOKEN_STRING_LIT) || match_tok(parser, TOKEN_IDENTIFIER)) {
+        Token target = previous_tok(parser);
+        /* repeat_of is contextual; keep it usable as an ordinary identifier. */
+        if (target.type == TOKEN_IDENTIFIER && strcmp(target.lexeme, "repeat_of") == 0 &&
+            match_tok(parser, TOKEN_COLON)) {
+            if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected rule name after 'repeat_of :'")) {
+                return false;
+            }
+            if (check_tok(parser, TOKEN_KW_WITHIN)) return parse_within_clause(parser);
+        }
         return true;
     }
     return parse_duration_expr(parser);

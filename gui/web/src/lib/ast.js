@@ -172,13 +172,18 @@ export function buildAst(tokens) {
     const kw = next();
     const nn = node('SuppressAction', { detail: '', ...atLoc(kw) });
     match('TOKEN_COLON');
+    const repeat = at('TOKEN_IDENTIFIER') && peek().lex === 'repeat_of' && at('TOKEN_COLON', 1);
+    if (repeat) {
+      next(); next();
+      if (at('TOKEN_IDENTIFIER')) nn.detail = `repeat_of : ${next().lex}`;
+    }
     if (match('TOKEN_KW_WITHIN')) {
       const d = add(nn, duration());
       if (d) {
         const unit = d.children[0] ? ' ' + d.children[0].detail : '';
-        nn.detail = `within ${d.detail}${unit}`;
+        nn.detail += `${repeat ? ' ' : ''}within ${d.detail}${unit}`;
       }
-    } else if (at('TOKEN_STRING_LIT') || at('TOKEN_IDENTIFIER')) {
+    } else if (!repeat && (at('TOKEN_STRING_LIT') || at('TOKEN_IDENTIFIER'))) {
       nn.detail = next().lex;
     }
     return nn;
@@ -198,6 +203,7 @@ export function buildAst(tokens) {
 
     if (match('TOKEN_KW_THEN')) {
       const thenB = node('ThenBranch', { detail: 'then', ...atLoc(toks[pos - 1]) });
+      match('TOKEN_COLON');
       while (!atEnd() && BRANCH_START.has(peek().type)) {
         const s = statement();
         if (!s) break;
@@ -207,6 +213,7 @@ export function buildAst(tokens) {
     }
     if (match('TOKEN_KW_OTHERWISE')) {
       const elseB = node('OtherwiseBranch', { detail: 'otherwise', ...atLoc(toks[pos - 1]) });
+      match('TOKEN_COLON');
       while (!atEnd() && BRANCH_START.has(peek().type)) {
         const s = statement();
         if (!s) break;

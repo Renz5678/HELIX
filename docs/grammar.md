@@ -50,6 +50,11 @@ The initial HELIX language documentation contains several drafting ambiguities a
 - **Decision:**
   - The grammar specifies `duration_expr` as accepting numeric literals followed by optional identifier units (e.g., `24 hours`, `10 m`, `7 days`), single string literals (e.g., `"24h"`), or standalone identifiers.
 
+### 2.6 Targeted Repeat Suppression
+- `suppress repeat_of : HighGlucoseAlert within 4 hours` names the rule whose repeated notifications are suppressed. The `within` clause is optional.
+- `repeat_of` is contextual only when followed by `:` in a suppression statement; it remains an identifier elsewhere, preserving the 21 reserved words and existing suppression forms.
+- The parser validates syntax, not rule-name resolution or notification delivery. The timeline remains a preview of one rule's suppression window.
+
 ---
 
 ## 3. Lexical Specification
@@ -150,7 +155,10 @@ action_stmt          = alert_stmt | suppress_stmt ;
 
 alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
 
-suppress_stmt        = "suppress" , [ ":" ] , [ IDENTIFIER | STRING_LITERAL | duration_expr ] ;
+suppress_stmt        = "suppress" , [ ":" ] ,
+                       ( repeat_suppression | within_clause | duration_expr ) ;
+
+repeat_suppression   = "repeat_of" , ":" , IDENTIFIER , [ within_clause ] ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)

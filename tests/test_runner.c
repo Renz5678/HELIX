@@ -823,6 +823,17 @@ static bool test_helix38_edge_cases(void) {
     return true;
 }
 
+/* HELIX-16: named repeat-alert suppression */
+static bool test_helix16_suppress_repeat_of(void) {
+    return test_string_validation("rule R: suppress repeat_of : R end rule", true) &&
+           test_string_validation("rule R:\n    suppress: repeat_of : R\nend rule\n", true);
+}
+
+static bool test_helix16_neg_suppress_repeat_of(void) {
+    return test_string_validation("rule R: suppress repeat_of : end rule", false) &&
+           test_string_validation("rule R: suppress other : R end rule", false);
+}
+
 int main(void) {
     printf("========================================\n");
     printf(" HELIX Test Suite (Automated Verification)\n");
@@ -866,6 +877,11 @@ int main(void) {
     run_test("HELIX-17: Neg - Missing Temporal Reference", test_helix17_neg_missing_temporal_ref);
     run_test("HELIX-17: Neg - Incomplete Query", test_helix17_neg_incomplete_query);
     run_test("HELIX-17: Neg - Trailing Tokens", test_helix17_neg_trailing_tokens);
+
+    /* HELIX-16 Unit Tests */
+    run_test("HELIX-16: suppress repeat_of : R", test_helix16_suppress_repeat_of);
+    run_test("HELIX-16: Neg - malformed repeat_of", test_helix16_neg_suppress_repeat_of);
+
 
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);

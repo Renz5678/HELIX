@@ -1,0 +1,4 @@
+# Invalid: Invalid duration time unit (HELIX-17)
+rule InvalidTimeUnit:
+    latest Observation where code = potassium within 24 lightyears before now
+end rule

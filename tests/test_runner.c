@@ -481,6 +481,11 @@ static bool test_fixture_syn_missing_expression(void) {
     return test_file_validation("tests/invalid/syn_missing_expression.helix", false);
 }
 
+/* --- HELIX-17 Unit Tests: Latest Observation Queries --- */
+
+static bool test_parse_string(const char *source, bool expect_valid) {
+    SourceBuffer src;
+    source_from_string("test_inline", source, &src);
 /* --- HELIX-38 Unit Tests: Arithmetic Operators --- */
 
 static bool check_tokens(const char *input, size_t expected_count, const TokenType *expected_types, const char **expected_lexemes) {
@@ -510,6 +515,123 @@ static bool check_tokens(const char *input, size_t expected_count, const TokenTy
     token_list_free(&tokens);
     diag_free(&diag);
     source_free(&src);
+
+    return is_valid == expect_valid;
+}
+
+static bool test_helix17_valid_latest_query_multiline(void) {
+    const char *code =
+        "rule PotassiumAlert:\n"
+        "    latest Observation\n"
+        "    where code = potassium\n"
+        "    within 24 hours before now\n"
+        "end\n";
+    return test_parse_string(code, true);
+}
+
+static bool test_helix17_valid_query_in_expressions(void) {
+    const char *code_let =
+        "rule LetQuery:\n"
+        "    let k := latest Observation where code = potassium within 24 hours before now\n"
+        "end\n";
+    const char *code_bind =
+        "rule BindQuery:\n"
+        "    bind k = latest Observation where code = potassium within 24 hours before now\n"
+        "end\n";
+    const char *code_when =
+        "rule WhenQuery:\n"
+        "    when (latest Observation where code = potassium within 24 hours before now) > 5.0\n"
+        "    then alert: \"High\"\n"
+        "end\n";
+    return test_parse_string(code_let, true) &&
+           test_parse_string(code_bind, true) &&
+           test_parse_string(code_when, true);
+}
+
+static bool test_helix17_valid_without_before_now(void) {
+    const char *code =
+        "rule WithoutBeforeNow:\n"
+        "    latest Observation where code = potassium within 24 hours\n"
+        "end\n";
+    return test_parse_string(code, true);
+}
+
+static bool test_helix17_valid_various_units_and_types(void) {
+    const char *code1 =
+        "rule DaysUnit:\n"
+        "    latest BloodPressure where systolic > 140 within 7 days before now\n"
+        "end\n";
+    const char *code2 =
+        "rule MinutesUnit:\n"
+        "    latest Glucose where level > 200 within 30 minutes before now\n"
+        "end\n";
+    const char *code3 =
+        "rule StringDuration:\n"
+        "    latest HeartRate where rate > 100 within \"24h\" before now\n"
+        "end\n";
+    return test_parse_string(code1, true) &&
+           test_parse_string(code2, true) &&
+           test_parse_string(code3, true);
+}
+
+static bool test_helix17_neg_missing_obs_type(void) {
+    const char *code1 = "rule Bad: latest where code = potassium within 24 hours before now end";
+    const char *code2 = "rule Bad: latest end";
+    return test_parse_string(code1, false) && test_parse_string(code2, false);
+}
+
+static bool test_helix17_neg_missing_where_condition(void) {
+    const char *code1 = "rule Bad: latest Observation where within 24 hours before now end";
+    const char *code2 = "rule Bad: latest Observation where end";
+    return test_parse_string(code1, false) && test_parse_string(code2, false);
+}
+
+static bool test_helix17_neg_missing_duration(void) {
+    const char *code1 = "rule Bad: latest Observation where code = potassium within before now end";
+    const char *code2 = "rule Bad: latest Observation where code = potassium within end";
+    return test_parse_string(code1, false) && test_parse_string(code2, false);
+}
+
+static bool test_helix17_neg_invalid_time_unit(void) {
+    const char *code1 = "rule Bad: latest Observation where code = potassium within 24 lightyears before now end";
+    const char *code2 = "rule Bad: latest Observation where code = potassium within 24 before now end";
+    return test_parse_string(code1, false) && test_parse_string(code2, false);
+}
+
+static bool test_helix17_neg_missing_temporal_ref(void) {
+    const char *code1 = "rule Bad: latest Observation where code = potassium within 24 hours before end";
+    const char *code2 = "rule Bad: latest Observation where code = potassium within 24 hours before yesterday end";
+    return test_parse_string(code1, false) && test_parse_string(code2, false);
+}
+
+static bool test_helix17_neg_incomplete_query(void) {
+    const char *code1 = "rule Bad: latest Observation end";
+    const char *code2 = "rule Bad: latest Observation where code = potassium end";
+    return test_parse_string(code1, false) && test_parse_string(code2, false);
+}
+
+static bool test_helix17_neg_trailing_tokens(void) {
+    const char *code =
+        "rule Bad:\n"
+        "    let x := latest Observation where code = potassium within 24 hours before now trailing_junk\n"
+        "end\n";
+    return test_parse_string(code, false);
+}
+
+static bool test_fixture_latest_observation(void) {
+    return test_file_validation("tests/parser/test_latest_observation.helix", true);
+}
+
+static bool test_fixture_syn_missing_obs_type(void) {
+    return test_file_validation("tests/invalid/syn_missing_obs_type.helix", false);
+}
+
+static bool test_fixture_syn_incomplete_latest_query(void) {
+    return test_file_validation("tests/invalid/syn_incomplete_latest_query.helix", false);
+}
+
+static bool test_fixture_syn_invalid_time_unit(void) {
+    return test_file_validation("tests/invalid/syn_invalid_time_unit.helix", false);
     return true;
 }
 
@@ -708,12 +830,26 @@ int main(void) {
     run_test("HELIX-38: Jira Reproduction Snippets", test_helix38_jira_reproduction);
     run_test("HELIX-38: Edge Cases and Invariants", test_helix38_edge_cases);
 
+    /* HELIX-17 Unit Tests */
+    run_test("HELIX-17: Valid Latest Observation Query", test_helix17_valid_latest_query_multiline);
+    run_test("HELIX-17: Query in Let, Bind, When", test_helix17_valid_query_in_expressions);
+    run_test("HELIX-17: Query without Before Now", test_helix17_valid_without_before_now);
+    run_test("HELIX-17: Query with Various Units & Types", test_helix17_valid_various_units_and_types);
+    run_test("HELIX-17: Neg - Missing Observation Type", test_helix17_neg_missing_obs_type);
+    run_test("HELIX-17: Neg - Missing Where Condition", test_helix17_neg_missing_where_condition);
+    run_test("HELIX-17: Neg - Missing Duration", test_helix17_neg_missing_duration);
+    run_test("HELIX-17: Neg - Invalid Time Unit", test_helix17_neg_invalid_time_unit);
+    run_test("HELIX-17: Neg - Missing Temporal Reference", test_helix17_neg_missing_temporal_ref);
+    run_test("HELIX-17: Neg - Incomplete Query", test_helix17_neg_incomplete_query);
+    run_test("HELIX-17: Neg - Trailing Tokens", test_helix17_neg_trailing_tokens);
+
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);
     run_test("Fixture: examples/temporal_rule.helix", test_fixture_temporal_rule);
     run_test("Fixture: examples/alert_rule.helix", test_fixture_alert_rule);
     run_test("Fixture: tests/parser/test_minimal.helix", test_fixture_minimal_rule);
     run_test("Fixture: tests/parser/test_multiple_rules.helix", test_fixture_multiple_rules);
+    run_test("Fixture: tests/parser/test_latest_observation.helix", test_fixture_latest_observation);
 
     /* Negative Fixture tests */
     run_test("Negative: Unterminated string", test_fixture_lex_unterminated_string);
@@ -722,6 +858,9 @@ int main(void) {
     run_test("Negative: Missing rule name", test_fixture_syn_missing_rule_name);
     run_test("Negative: Missing rule end", test_fixture_syn_missing_end);
     run_test("Negative: Missing expression", test_fixture_syn_missing_expression);
+    run_test("Negative: Missing observation type", test_fixture_syn_missing_obs_type);
+    run_test("Negative: Incomplete latest query", test_fixture_syn_incomplete_latest_query);
+    run_test("Negative: Invalid time unit", test_fixture_syn_invalid_time_unit);
 
     printf("\n========================================\n");
     printf(" Results: %d/%d tests passed (%d failed)\n",

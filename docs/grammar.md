@@ -45,10 +45,12 @@ The initial HELIX language documentation contains several drafting ambiguities a
     ```
   - This avoids lexical state tricks and keeps the scanner purely context-free and deterministic.
 
-### 2.5 Temporal Qualifiers and Duration Units
-- **Analysis:** Temporal windows are expressed using `within` (e.g. `within 24 hours`, `within 30m`, `within "24h"`).
+### 2.5 Temporal Qualifiers, Duration Units, and Latest Observation Queries
+- **Analysis:** Temporal windows are expressed using `within` (e.g. `within 24 hours`, `within 30 minutes`, `within 24 hours before now`, `within "24h"`). Latest-matching-record queries combine `latest <type>` with filter conditions and temporal windows.
 - **Decision:**
-  - The grammar specifies `duration_expr` as accepting numeric literals followed by optional identifier units (e.g., `24 hours`, `10 m`, `7 days`), single string literals (e.g., `"24h"`), or standalone identifiers.
+  - `duration_expr` requires numeric literals to be followed by a valid time unit identifier (e.g., `hours`, `minutes`, `days`, `s`) or a string literal (e.g., `"24h"`).
+  - `within_clause` accepts an optional temporal reference suffix `"before" "now"`.
+  - `latest_query` expresses queries over observation records (`latest <observation_type> where <condition> within <duration> [before now]`), supported both as an expression and directly within rule blocks.
 
 ### 2.6 Explicit Block-Specific Terminators (`end rule`, `end bind`, `end when`)
 - **Analysis:** Earlier documentation and parser drafts had an inconsistency where documentation illustrated explicit block-specific terminators (such as `end bind`, `end when`, `end rule`), while older parser implementations accepted a generic standalone `end`.
@@ -127,7 +129,8 @@ rule_element         = intent_decl
                      | bind_decl
                      | let_decl
                      | when_stmt
-                     | action_stmt ;
+                     | action_stmt
+                     | latest_query ;
 
 (* Declarations *)
 intent_decl          = "intent" , [ ":" ] , STRING_LITERAL ;
@@ -180,11 +183,12 @@ comp_op              = "==" | "!=" | ">" | "<" | ">=" | "<=" | "=" ;
 
 where_clause         = "where" , expression ;
 
-within_clause        = "within" , duration_expr ;
+within_clause        = "within" , duration_expr , [ "before" , "now" ] ;
 
-duration_expr        = ( INT_LITERAL | FLOAT_LITERAL ) , [ IDENTIFIER ]
-                     | STRING_LITERAL
-                     | IDENTIFIER ;
+duration_expr        = ( INT_LITERAL | FLOAT_LITERAL ) , IDENTIFIER
+                     | STRING_LITERAL ;
+
+latest_query         = "latest" , IDENTIFIER , where_clause , within_clause ;
 
 postfix_expr         = primary_expr , { postfix_op } ;
 
@@ -206,7 +210,7 @@ primary_expr         = IDENTIFIER
                      | INT_LITERAL
                      | FLOAT_LITERAL
                      | STRING_LITERAL
-                     | "latest"
+                     | latest_query
                      | "(" , expression , ")" ;
 ```
 

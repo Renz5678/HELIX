@@ -3,6 +3,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+static int s_where_depth = 0;
 
 void parser_init(Parser *parser, const TokenList *tokens, DiagnosticEngine *diag) {
     if (!parser)
@@ -11,6 +14,7 @@ void parser_init(Parser *parser, const TokenList *tokens, DiagnosticEngine *diag
     parser->current = 0;
     parser->diag = diag;
     parser->panic_mode = false;
+    s_where_depth = 0;
     parser->ast = NULL;
     parser->parent = NULL;
     parser->depth = 0;
@@ -143,6 +147,7 @@ static bool consume_block_end(Parser *parser, TokenType expected_kw, const char 
 /* Panic-mode synchronization to recover from syntax errors */
 static void synchronize(Parser *parser) {
     parser->panic_mode = false;
+    s_where_depth = 0;
 
     if (!is_at_end(parser)) {
         advance_tok(parser);
@@ -151,23 +156,24 @@ static void synchronize(Parser *parser) {
     while (!is_at_end(parser)) {
         TokenType t = peek_tok(parser).type;
         switch (t) {
-        case TOKEN_KW_RULE:
-        case TOKEN_KW_END:
-        case TOKEN_KW_INTENT:
-        case TOKEN_KW_SCHEDULE:
-        case TOKEN_KW_TERMINOLOGY:
-        case TOKEN_KW_SITE:
-        case TOKEN_KW_SOURCE:
-        case TOKEN_KW_BIND:
-        case TOKEN_KW_LET:
-        case TOKEN_KW_WHEN:
-        case TOKEN_KW_THEN:
-        case TOKEN_KW_ALERT:
-        case TOKEN_KW_SUPPRESS:
-        case TOKEN_KW_OTHERWISE:
-            return;
-        default:
-            break;
+            case TOKEN_KW_RULE:
+            case TOKEN_KW_END:
+            case TOKEN_KW_INTENT:
+            case TOKEN_KW_SCHEDULE:
+            case TOKEN_KW_TERMINOLOGY:
+            case TOKEN_KW_SITE:
+            case TOKEN_KW_SOURCE:
+            case TOKEN_KW_BIND:
+            case TOKEN_KW_LET:
+            case TOKEN_KW_WHEN:
+            case TOKEN_KW_THEN:
+            case TOKEN_KW_ALERT:
+            case TOKEN_KW_SUPPRESS:
+            case TOKEN_KW_OTHERWISE:
+            case TOKEN_KW_LATEST:
+                return;
+            default:
+                break;
         }
         advance_tok(parser);
     }
@@ -195,6 +201,7 @@ static bool parse_unary_expr(Parser *parser);
 static bool parse_comparison_expr(Parser *parser);
 static bool parse_postfix_expr(Parser *parser);
 static bool parse_primary_expr(Parser *parser);
+static bool parse_latest_query(Parser *parser);
 static bool parse_where_clause(Parser *parser);
 static bool parse_within_clause(Parser *parser);
 static bool parse_duration_expr(Parser *parser);
@@ -840,8 +847,8 @@ static bool impl_parse_primary_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_STRING_LIT)) {
         return true;
     }
-    if (match_tok(parser, TOKEN_KW_LATEST)) {
-        return true;
+    if (check_tok(parser, TOKEN_KW_LATEST)) {
+        return parse_latest_query(parser);
     }
     if (match_tok(parser, TOKEN_LPAREN)) {
         if (!parse_expression(parser))
@@ -928,14 +935,14 @@ static bool impl_parse_comparison_expr(Parser *parser) {
         }
     }
 
-    if (check_tok(parser, TOKEN_KW_WHERE)) {
-        if (!parse_where_clause(parser))
-            return false;
-    }
+    if (s_where_depth == 0) {
+        if (check_tok(parser, TOKEN_KW_WHERE)) {
+            if (!parse_where_clause(parser)) return false;
+        }
 
-    if (check_tok(parser, TOKEN_KW_WITHIN)) {
-        if (!parse_within_clause(parser))
-            return false;
+        if (check_tok(parser, TOKEN_KW_WITHIN)) {
+            if (!parse_within_clause(parser)) return false;
+        }
     }
 
     return true;
@@ -972,34 +979,104 @@ static bool impl_parse_or_expr(Parser *parser) {
 
 static bool impl_parse_expression(Parser *parser) { return parse_or_expr(parser); }
 
-static bool impl_parse_where_clause(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_WHERE, "Expected 'where'"))
+static bool parse_where_clause(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_WHERE, "Expected 'where'")) return false;
+    if (check_tok(parser, TOKEN_KW_WITHIN) || check_tok(parser, TOKEN_KW_THEN) ||
+        check_tok(parser, TOKEN_KW_END) || is_at_end(parser)) {
+        error_at_current(parser, "Expected condition after 'where'");
         return false;
-    return parse_expression(parser);
+    }
+    s_where_depth++;
+    bool ok = parse_expression(parser);
+    s_where_depth--;
+    return ok;
+}
+
+static bool is_valid_time_unit(const char *unit) {
+    if (!unit) return false;
+    static const char *const VALID_UNITS[] = {
+        "s", "sec", "secs", "second", "seconds",
+        "m", "min", "mins", "minute", "minutes",
+        "h", "hr", "hrs", "hour", "hours",
+        "d", "day", "days",
+        "w", "wk", "wks", "week", "weeks",
+        "month", "months",
+        "year", "years"
+    };
+    size_t count = sizeof(VALID_UNITS) / sizeof(VALID_UNITS[0]);
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(unit, VALID_UNITS[i]) == 0) return true;
+    }
+    return false;
 }
 
 static bool impl_parse_duration_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_INT_LIT) || match_tok(parser, TOKEN_FLOAT_LIT)) {
-        /* Optional unit identifier e.g. 'hours', 'minutes', 'days', 'm' */
         if (check_tok(parser, TOKEN_IDENTIFIER)) {
-            advance_tok(parser);
+            const char *unit = peek_tok(parser).lexeme;
+            if (is_valid_time_unit(unit)) {
+                advance_tok(parser);
+                return true;
+            }
+            if (strcmp(unit, "before") == 0) {
+                error_at_current(parser, "Expected time unit after duration number (e.g. 'hours', 'minutes', 'days')");
+                return false;
+            }
+            error_at_current(parser, "Invalid time unit '%s'. Expected 'hours', 'minutes', 'days', etc.", unit);
+            return false;
         }
-        return true;
+        error_at_current(parser, "Expected time unit after duration number (e.g. 'hours', 'minutes', 'days')");
+        return false;
     }
     if (match_tok(parser, TOKEN_STRING_LIT)) {
-        return true;
-    }
-    if (match_tok(parser, TOKEN_IDENTIFIER)) {
         return true;
     }
     error_at_current(parser, "Expected duration expression (e.g. 24 hours, \"30m\")");
     return false;
 }
 
-static bool impl_parse_within_clause(Parser *parser) {
-    if (!consume_tok(parser, TOKEN_KW_WITHIN, "Expected 'within'"))
+static bool parse_within_clause(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_WITHIN, "Expected 'within'")) return false;
+    if (!parse_duration_expr(parser)) return false;
+
+    /* Optional temporal reference e.g. 'before now' */
+    if (check_tok(parser, TOKEN_IDENTIFIER) && strcmp(peek_tok(parser).lexeme, "before") == 0) {
+        advance_tok(parser);
+        if (check_tok(parser, TOKEN_IDENTIFIER) && strcmp(peek_tok(parser).lexeme, "now") == 0) {
+            advance_tok(parser);
+        } else {
+            error_at_current(parser, "Expected 'now' after 'before'");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool parse_latest_query(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_LATEST, "Expected 'latest'")) return false;
+
+    if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected observation type after 'latest'")) {
         return false;
-    return parse_duration_expr(parser);
+    }
+
+    if (!check_tok(parser, TOKEN_KW_WHERE)) {
+        error_at_current(parser, "Expected 'where' clause in latest observation query");
+        return false;
+    }
+    if (!parse_where_clause(parser)) {
+        return false;
+    }
+
+    if (!check_tok(parser, TOKEN_KW_WITHIN)) {
+        error_at_current(parser, "Expected 'within' clause in latest observation query");
+        return false;
+    }
+    if (!parse_within_clause(parser)) {
+        return false;
+    }
+
+    return true;
 }
 
 /* --- Declarations & Statements --- */
@@ -1018,8 +1095,7 @@ static bool impl_parse_schedule_decl(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_SCHEDULE, "Expected 'schedule'"))
         return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
-    if (check_tok(parser, TOKEN_STRING_LIT)) {
-        advance_tok(parser);
+    if (match_tok(parser, TOKEN_STRING_LIT) || match_tok(parser, TOKEN_IDENTIFIER)) {
         return true;
     }
     return parse_duration_expr(parser);
@@ -1231,35 +1307,35 @@ static bool impl_parse_when_stmt(Parser *parser) {
 }
 
 static bool is_rule_element_start(TokenType t) {
-    return (t == TOKEN_KW_INTENT || t == TOKEN_KW_SCHEDULE || t == TOKEN_KW_TERMINOLOGY ||
-            t == TOKEN_KW_SITE || t == TOKEN_KW_SOURCE || t == TOKEN_KW_BIND || t == TOKEN_KW_LET ||
-            t == TOKEN_KW_WHEN || t == TOKEN_KW_ALERT || t == TOKEN_KW_SUPPRESS);
+    return (t == TOKEN_KW_INTENT ||
+            t == TOKEN_KW_SCHEDULE ||
+            t == TOKEN_KW_TERMINOLOGY ||
+            t == TOKEN_KW_SITE ||
+            t == TOKEN_KW_SOURCE ||
+            t == TOKEN_KW_BIND ||
+            t == TOKEN_KW_LET ||
+            t == TOKEN_KW_WHEN ||
+            t == TOKEN_KW_ALERT ||
+            t == TOKEN_KW_SUPPRESS ||
+            t == TOKEN_KW_LATEST);
 }
 
 static bool impl_parse_rule_element(Parser *parser) {
     switch (peek_tok(parser).type) {
-    case TOKEN_KW_INTENT:
-        return parse_intent_decl(parser);
-    case TOKEN_KW_SCHEDULE:
-        return parse_schedule_decl(parser);
-    case TOKEN_KW_TERMINOLOGY:
-        return parse_terminology_decl(parser);
-    case TOKEN_KW_SITE:
-        return parse_site_decl(parser);
-    case TOKEN_KW_SOURCE:
-        return parse_source_decl(parser);
-    case TOKEN_KW_BIND:
-        return parse_bind_decl(parser);
-    case TOKEN_KW_LET:
-        return parse_let_decl(parser);
-    case TOKEN_KW_WHEN:
-        return parse_when_stmt(parser);
-    case TOKEN_KW_ALERT:
-    case TOKEN_KW_SUPPRESS:
-        return parse_action_stmt(parser);
-    default:
-        error_at_current(parser, "Unexpected token '%s' in rule body", peek_tok(parser).lexeme);
-        return false;
+        case TOKEN_KW_INTENT:      return parse_intent_decl(parser);
+        case TOKEN_KW_SCHEDULE:    return parse_schedule_decl(parser);
+        case TOKEN_KW_TERMINOLOGY: return parse_terminology_decl(parser);
+        case TOKEN_KW_SITE:        return parse_site_decl(parser);
+        case TOKEN_KW_SOURCE:      return parse_source_decl(parser);
+        case TOKEN_KW_BIND:        return parse_bind_decl(parser);
+        case TOKEN_KW_LET:         return parse_let_decl(parser);
+        case TOKEN_KW_WHEN:        return parse_when_stmt(parser);
+        case TOKEN_KW_ALERT:
+        case TOKEN_KW_SUPPRESS:    return parse_action_stmt(parser);
+        case TOKEN_KW_LATEST:      return parse_latest_query(parser);
+        default:
+            error_at_current(parser, "Unexpected token '%s' in rule body", peek_tok(parser).lexeme);
+            return false;
     }
 }
 

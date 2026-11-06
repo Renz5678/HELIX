@@ -60,7 +60,12 @@ The initial HELIX language documentation contains several drafting ambiguities a
   - `end when` closes a conditional block.
   - A standalone `end` is not a valid complete block terminator.
   - Mismatched block terminators (e.g. `end rule` closing a `bind` block) produce a syntax error.
-
+### 2.7 Named Repeat-Alert Suppression (`repeat_of`)
+- **Analysis:** The proposal's example `suppress repeat_of : R` names a rule whose repeat alerts should be suppressed. `repeat_of` is not among the 21 reserved words, and the colon-separated form was rejected by the parser.
+- **Decision:**
+  - The format `suppress repeat_of : <rule name>` is retained and accepted as a whole instruction.
+  - `repeat_of` stays a contextual identifier: it lexes as `IDENTIFIER` and is recognized only directly after `suppress` when followed by `:`. No new reserved keyword is introduced.
+  - `suppress repeat_of : R` requires the rule name after the colon. Other `identifier : identifier` forms after `suppress` remain syntax errors.
 ---
 
 ## 3. Lexical Specification
@@ -163,7 +168,9 @@ action_stmt          = alert_stmt | suppress_stmt ;
 
 alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
 
-suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
+suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | repeat_of_spec | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
+
+repeat_of_spec       = "repeat_of" , ":" , IDENTIFIER ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)

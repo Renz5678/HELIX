@@ -626,8 +626,11 @@ static bool parse_bind_decl(Parser *parser) {
         parser->parent = node;
     }
     bool ok = impl_parse_bind_decl(parser);
-    if (node)
+    if (node) {
+        if (node->count > 0 && node->children[0]->kind == AST_SITE)
+            node->kind = AST_SITE;
         node->end = parser->current;
+    }
     parser->parent = parent;
     --parser->depth;
     return ok;
@@ -1162,6 +1165,23 @@ static bool impl_parse_source_decl(Parser *parser) {
 static bool impl_parse_bind_decl(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_BIND, "Expected 'bind'"))
         return false;
+    if (check_tok(parser, TOKEN_KW_SITE)) {
+        /* Configuration block: site/source/terminology declarations until 'end bind' */
+        while (!is_at_end(parser) && !check_tok(parser, TOKEN_KW_END)) {
+            TokenType t = peek_tok(parser).type;
+            bool ok;
+            if (t == TOKEN_KW_SITE) ok = parse_site_decl(parser);
+            else if (t == TOKEN_KW_SOURCE) ok = parse_source_decl(parser);
+            else if (t == TOKEN_KW_TERMINOLOGY) ok = parse_terminology_decl(parser);
+            else {
+                error_at_current(parser, "Unexpected token '%s' in 'bind site' block",
+                                 peek_tok(parser).lexeme);
+                ok = false;
+            }
+            if (!ok) return false;
+        }
+        return consume_block_end(parser, TOKEN_KW_BIND, "bind");
+    }
     if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected identifier after 'bind'")) {
         return false;
     }

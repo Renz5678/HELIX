@@ -823,6 +823,72 @@ static bool test_helix38_edge_cases(void) {
     return true;
 }
 
+/* --- HELIX-36 Unit Tests: bind site configuration blocks --- */
+
+static bool test_helix36_valid_bind_site(void) {
+    const char *with_string =
+        "rule R:\n"
+        "    bind site \"Hospital_B\"\n"
+        "    end bind\n"
+        "end rule\n";
+    const char *with_ident =
+        "rule R:\n"
+        "    bind site Hospital_B\n"
+        "    end bind\n"
+        "end rule\n";
+    return test_parse_string(with_string, true) && test_parse_string(with_ident, true);
+}
+
+static bool test_helix36_valid_source_and_terminology(void) {
+    const char *code =
+        "rule R:\n"
+        "    bind site \"Hospital_B\"\n"
+        "        source : FHIR_R4\n"
+        "        terminology: LOINC(\"2339-0\")\n"
+        "    end bind\n"
+        "    alert: \"ok\"\n"
+        "end rule\n";
+    return test_parse_string(code, true);
+}
+
+static bool test_helix36_bind_identifier_still_works(void) {
+    const char *code =
+        "rule R:\n"
+        "    bind x = T.value\n"
+        "    end bind\n"
+        "end rule\n";
+    return test_parse_string(code, true);
+}
+
+static bool test_helix36_neg_invalid_token_after_bind(void) {
+    const char *num = "rule R:\n    bind 42\n    end bind\nend rule\n";
+    const char *str = "rule R:\n    bind \"x\"\n    end bind\nend rule\n";
+    return test_parse_string(num, false) && test_parse_string(str, false);
+}
+
+static bool test_helix36_neg_terminators(void) {
+    const char *missing_eof = "rule R:\n    bind site \"H\"\n";
+    const char *wrong_desc  = "rule R:\n    bind site \"H\"\n    end rule\n";
+    const char *bare_end    = "rule R:\n    bind site \"H\"\n    end\nend rule\n";
+    return test_parse_string(missing_eof, false) &&
+           test_parse_string(wrong_desc, false) &&
+           test_parse_string(bare_end, false);
+}
+
+static bool test_helix36_neg_unexpected_statements(void) {
+    const char *alert = "rule R:\n    bind site \"H\"\n    alert: \"x\"\n    end bind\nend rule\n";
+    const char *let   = "rule R:\n    bind site \"H\"\n    let a := 1\n    end bind\nend rule\n";
+    const char *when  = "rule R:\n    bind site \"H\"\n    when a > 1:\n    end when\n    end bind\nend rule\n";
+    return test_parse_string(alert, false) &&
+           test_parse_string(let, false) &&
+           test_parse_string(when, false);
+}
+
+static bool test_helix36_neg_site_without_name(void) {
+    const char *code = "rule R:\n    bind site\n    end bind\nend rule\n";
+    return test_parse_string(code, false);
+}
+
 int main(void) {
     printf("========================================\n");
     printf(" HELIX Test Suite (Automated Verification)\n");
@@ -866,6 +932,15 @@ int main(void) {
     run_test("HELIX-17: Neg - Missing Temporal Reference", test_helix17_neg_missing_temporal_ref);
     run_test("HELIX-17: Neg - Incomplete Query", test_helix17_neg_incomplete_query);
     run_test("HELIX-17: Neg - Trailing Tokens", test_helix17_neg_trailing_tokens);
+
+    /* HELIX-36: bind site configuration blocks */
+    run_test("HELIX-36: Valid bind site", test_helix36_valid_bind_site);
+    run_test("HELIX-36: bind site with source & terminology", test_helix36_valid_source_and_terminology);
+    run_test("HELIX-36: bind <identifier> still works", test_helix36_bind_identifier_still_works);
+    run_test("HELIX-36: Neg - Invalid token after bind", test_helix36_neg_invalid_token_after_bind);
+    run_test("HELIX-36: Neg - Bad block terminators", test_helix36_neg_terminators);
+    run_test("HELIX-36: Neg - Unexpected statements in block", test_helix36_neg_unexpected_statements);
+    run_test("HELIX-36: Neg - site without name", test_helix36_neg_site_without_name);
 
     /* Integration / Fixture tests */
     run_test("Fixture: examples/basic_rule.helix", test_fixture_basic_rule);

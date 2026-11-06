@@ -14,8 +14,10 @@ rule LatestObservationRule:
     bind k_bound = latest Observation
     where code = potassium
     within 24 hours before now
+    end bind
 
     when (latest Observation where code = potassium within 24 hours before now) > 5.0:
     then:
         alert: "Elevated Potassium Level"
-end
+    end when
+end rule

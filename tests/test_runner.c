@@ -486,6 +486,28 @@ static bool test_fixture_syn_missing_expression(void) {
 static bool test_parse_string(const char *source, bool expect_valid) {
     SourceBuffer src;
     source_from_string("test_inline", source, &src);
+
+    DiagnosticEngine diag;
+    diag_init(&diag, &src, NULL);
+
+    Lexer lexer;
+    lexer_init(&lexer, &src, &diag);
+    TokenList tokens;
+    lexer_tokenize_all(&lexer, &tokens);
+
+    Parser parser;
+    parser_init(&parser, &tokens, &diag);
+    parser_parse(&parser);
+
+    bool is_valid = (diag.lexical_errors == 0 && diag.syntax_errors == 0);
+
+    token_list_free(&tokens);
+    diag_free(&diag);
+    source_free(&src);
+
+    return is_valid == expect_valid;
+}
+
 /* --- HELIX-38 Unit Tests: Arithmetic Operators --- */
 
 static bool check_tokens(const char *input, size_t expected_count, const TokenType *expected_types, const char **expected_lexemes) {
@@ -516,7 +538,7 @@ static bool check_tokens(const char *input, size_t expected_count, const TokenTy
     diag_free(&diag);
     source_free(&src);
 
-    return is_valid == expect_valid;
+    return true;
 }
 
 static bool test_helix17_valid_latest_query_multiline(void) {
@@ -525,7 +547,7 @@ static bool test_helix17_valid_latest_query_multiline(void) {
         "    latest Observation\n"
         "    where code = potassium\n"
         "    within 24 hours before now\n"
-        "end\n";
+        "end rule\n";
     return test_parse_string(code, true);
 }
 
@@ -533,16 +555,18 @@ static bool test_helix17_valid_query_in_expressions(void) {
     const char *code_let =
         "rule LetQuery:\n"
         "    let k := latest Observation where code = potassium within 24 hours before now\n"
-        "end\n";
+        "end rule\n";
     const char *code_bind =
         "rule BindQuery:\n"
         "    bind k = latest Observation where code = potassium within 24 hours before now\n"
-        "end\n";
+        "    end bind\n"
+        "end rule\n";
     const char *code_when =
         "rule WhenQuery:\n"
         "    when (latest Observation where code = potassium within 24 hours before now) > 5.0\n"
         "    then alert: \"High\"\n"
-        "end\n";
+        "    end when\n"
+        "end rule\n";
     return test_parse_string(code_let, true) &&
            test_parse_string(code_bind, true) &&
            test_parse_string(code_when, true);
@@ -552,7 +576,7 @@ static bool test_helix17_valid_without_before_now(void) {
     const char *code =
         "rule WithoutBeforeNow:\n"
         "    latest Observation where code = potassium within 24 hours\n"
-        "end\n";
+        "end rule\n";
     return test_parse_string(code, true);
 }
 
@@ -560,15 +584,15 @@ static bool test_helix17_valid_various_units_and_types(void) {
     const char *code1 =
         "rule DaysUnit:\n"
         "    latest BloodPressure where systolic > 140 within 7 days before now\n"
-        "end\n";
+        "end rule\n";
     const char *code2 =
         "rule MinutesUnit:\n"
         "    latest Glucose where level > 200 within 30 minutes before now\n"
-        "end\n";
+        "end rule\n";
     const char *code3 =
         "rule StringDuration:\n"
         "    latest HeartRate where rate > 100 within \"24h\" before now\n"
-        "end\n";
+        "end rule\n";
     return test_parse_string(code1, true) &&
            test_parse_string(code2, true) &&
            test_parse_string(code3, true);
@@ -632,7 +656,6 @@ static bool test_fixture_syn_incomplete_latest_query(void) {
 
 static bool test_fixture_syn_invalid_time_unit(void) {
     return test_file_validation("tests/invalid/syn_invalid_time_unit.helix", false);
-    return true;
 }
 
 static bool test_helix38_basic_arithmetic(void) {

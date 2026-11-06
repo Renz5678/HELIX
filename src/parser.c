@@ -979,7 +979,7 @@ static bool impl_parse_or_expr(Parser *parser) {
 
 static bool impl_parse_expression(Parser *parser) { return parse_or_expr(parser); }
 
-static bool parse_where_clause(Parser *parser) {
+static bool impl_parse_where_clause(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_WHERE, "Expected 'where'")) return false;
     if (check_tok(parser, TOKEN_KW_WITHIN) || check_tok(parser, TOKEN_KW_THEN) ||
         check_tok(parser, TOKEN_KW_END) || is_at_end(parser)) {
@@ -1035,7 +1035,7 @@ static bool impl_parse_duration_expr(Parser *parser) {
     return false;
 }
 
-static bool parse_within_clause(Parser *parser) {
+static bool impl_parse_within_clause(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_WITHIN, "Expected 'within'")) return false;
     if (!parse_duration_expr(parser)) return false;
 

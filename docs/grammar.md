@@ -69,6 +69,11 @@ The initial HELIX language documentation contains several drafting ambiguities a
     1. **Concept-to-terminology mappings:** one or more `IDENTIFIER "->" terminology_ref` entries under `terminology [:]` (e.g., `terminology potassium -> LOINC["serum potassium"]`), where `terminology_ref` accepts bracketed (`SYSTEM[expression]`) or parenthesized (`SYSTEM([argument_list])`) selectors. In free-field layout, additional mappings under the same `terminology` header are consumed using two-token lookahead (`IDENTIFIER` followed by `->`).
     2. **Direct terminology declarations:** `terminology [:] terminology_ref [ STRING_LITERAL ]` (e.g., `terminology: LOINC("2339-0")` or `terminology: LOINC["2339-0"]`).
 
+### 2.8 Targeted Repeat Suppression
+- `suppress repeat_of : HighGlucoseAlert within 4 hours` names the rule whose repeated notifications are suppressed. The `within` clause is optional.
+- `repeat_of` is contextual only when followed by `:` in a suppression statement; it remains an identifier elsewhere, preserving the 21 reserved words and existing suppression forms.
+- The parser validates syntax, not rule-name resolution or notification delivery. The timeline remains a preview of one rule's suppression window.
+
 ---
 
 ## 3. Lexical Specification
@@ -179,7 +184,10 @@ action_stmt          = alert_stmt | suppress_stmt ;
 
 alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
 
-suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
+suppress_stmt        = "suppress" , [ ":" ] ,
+                       ( repeat_suppression | within_clause | duration_expr | IDENTIFIER | STRING_LITERAL ) ;
+
+repeat_suppression   = "repeat_of" , ":" , IDENTIFIER , [ within_clause ] ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)

@@ -78,7 +78,7 @@ export function exportYaml(report, meta, code) {
     lines.push(`      message: ${yamlEscape(alertMsg[1])}`);
     if (alertMsg[2]) lines.push(`      level: ${yamlEscape(alertMsg[2])}`);
   }
-  const sup = code.match(/\bsuppress\s*:\s*within\s+(\d+\s*[A-Za-z]+)/);
+  const sup = code.match(/\bsuppress\s*:?\s*(?:repeat_of\s*:\s*[A-Za-z_]\w*\s+)?within\s+(\d+\s*[A-Za-z]+)/);
   if (sup) lines.push(`      suppress_within: ${yamlEscape(sup[1])}`);
   lines.push('  validation:');
   lines.push(`    status: ${stats.valid ? 'valid' : 'invalid'}`);

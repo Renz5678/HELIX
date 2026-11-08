@@ -5,6 +5,8 @@
 #include "diagnostic.h"
 #include "token.h"
 
+#define PARSER_MAX_DEPTH 256
+
 typedef struct {
     const TokenList *tokens;
     size_t current;

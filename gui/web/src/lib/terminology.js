@@ -25,7 +25,7 @@ export const CODES = [
   { system: 'LOINC', code: '7518-8', description: 'Hematocrit [Volume Fraction] of Blood by Automated count' },
   { system: 'LOINC', code: '718-7', description: 'Hemoglobin [Mass/volume] in Blood' },
   { system: 'LOINC', code: '2951-2', description: 'Sodium [Moles/volume] in Serum or Plasma' },
-  { system: 'LOINC', code: '2823-3', description: 'Potassium [Moles/volume] in Serum or Plasma' },
+  { system: 'LOINC', code: '2823-3', description: 'Potassium [Moles/volume] in Serum or Plasma', aliases: ['serum potassium'] },
   { system: 'LOINC', code: '1988-5', description: 'C reactive protein [Mass/volume] in Serum or Plasma' },
   { system: 'LOINC', code: '6301-6', description: 'INR in Platelet poor plasma by Coagulation assay' },
   { system: 'LOINC', code: '777-3', description: 'Platelets [#/volume] in Blood by Automated count' },
@@ -73,12 +73,18 @@ export const CODES = [
   { system: 'RxNorm', code: '1049502', description: 'Oseltamivir 75 MG Oral Capsule' },
 ];
 
-const index = new Map(CODES.map((c) => [`${c.system.toUpperCase()}|${c.code}`, c]));
+const index = new Map();
+for (const c of CODES) {
+  index.set(`${c.system.toUpperCase()}|${c.code.toLowerCase()}`, c);
+  for (const alias of c.aliases || []) {
+    index.set(`${c.system.toUpperCase()}|${alias.toLowerCase()}`, c);
+  }
+}
 
-/** Exact lookup, e.g. findTerm('LOINC', '2339-0'). */
+/** Exact lookup, e.g. findTerm('LOINC', '2339-0') or findTerm('LOINC', 'serum potassium'). */
 export function findTerm(system, code) {
   if (!system || !code) return null;
-  return index.get(`${system.toUpperCase()}|${code}`) || null;
+  return index.get(`${system.toUpperCase()}|${String(code).toLowerCase()}`) || null;
 }
 
 /** Substring search over code + description. */
@@ -94,27 +100,25 @@ export function searchTerms(query) {
 }
 
 /*
- * Scan source for terminology invocations: LOINC("2339-0"), SNOMED("..."), RxNorm("...")
+ * Scan source for terminology invocations: LOINC("2339-0"), LOINC["serum potassium"], SNOMED("..."), RxNorm("...")
  * Returns [{system, code, line, column, index}] with 1-based line/col.
  */
 export function extractTerminologyCalls(code) {
   const calls = [];
-  const re = /\b(LOINC|SNOMED|RxNorm)\s*\(\s*"([^"]*)"(\s*\))?|\b(LOINC|SNOMED|RxNorm)\s*\(\s*([A-Za-z0-9.\-]*)\s*(\))?/g;
-  /* Two passes keep the regex readable: quoted forms first, then bare. */
-  const quoted = /\b(LOINC|SNOMED|RxNorm)\s*\(\s*"([^"]*)"\s*\)/g;
-  const bare = /\b(LOINC|SNOMED|RxNorm)\s*\(\s*([A-Za-z0-9.\-]+)\s*\)/g;
+  /* Two passes keep the regex readable: quoted forms first, then bare, for both (...) and [...]. */
+  const quoted = /\b(LOINC|SNOMED|RxNorm)\s*(?:\(\s*"([^"]*)"\s*\)|\[\s*"([^"]*)"\s*\])/g;
+  const bare = /\b(LOINC|SNOMED|RxNorm)\s*(?:\(\s*([A-Za-z0-9.\-]+)\s*\)|\[\s*([A-Za-z0-9.\-]+)\s*\])/g;
   const collect = (r) => {
     let m;
     while ((m = r.exec(code)) !== null) {
       const before = code.slice(0, m.index);
       const line = before.split('\n').length;
       const column = m.index - (before.lastIndexOf('\n') + 1) + 1;
-      calls.push({ system: m[1], code: m[2], line, column, index: m.index });
+      calls.push({ system: m[1], code: m[2] ?? m[3], line, column, index: m.index });
     }
   };
   collect(quoted);
   collect(bare);
-  re.lastIndex = 0;
   return calls.sort((a, b) => a.index - b.index);
 }
 

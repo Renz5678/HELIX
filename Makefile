@@ -9,7 +9,7 @@ SAN_CC ?= $(CC)
 SAN_FLAGS = -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer
 
 GUI_TARGET = gui/helix-server
-GUI_SRC = src/source.c src/diagnostic.c src/token.c src/keywords.c src/lexer.c src/parser.c gui/server.c
+GUI_SRC = $(filter-out src/main.c,$(wildcard src/*.c)) gui/server.c
 GUI_LIBS = -lws2_32
 
 .PHONY: all test test-api test-sanitize sanitize wasm clean test-fault test-wasm gui web dev

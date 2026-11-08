@@ -1290,14 +1290,6 @@ static bool impl_parse_suppress_stmt(Parser *parser) {
     if (check_tok(parser, TOKEN_KW_WITHIN)) {
         return parse_within_clause(parser);
     }
-    /* HELIX-16: 'repeat_of : <rule>'. repeat_of is a contextual identifier, not a keyword. */
-    if (check_tok(parser, TOKEN_IDENTIFIER) &&
-        strcmp(peek_tok(parser).lexeme, "repeat_of") == 0 &&
-        peek_next_tok(parser).type == TOKEN_COLON) {
-        advance_tok(parser); /* repeat_of */
-        advance_tok(parser); /* ':' */
-        return consume_tok(parser, TOKEN_IDENTIFIER, "Expected rule name after 'repeat_of :'");
-    }
     if (match_tok(parser, TOKEN_STRING_LIT) || match_tok(parser, TOKEN_IDENTIFIER)) {
         Token target = previous_tok(parser);
         /* repeat_of is contextual; keep it usable as an ordinary identifier. */

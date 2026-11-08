@@ -74,15 +74,49 @@ export function buildAst(tokens) {
     return e;
   }
 
+  function negExpr() {
+    if (match('TOKEN_MINUS')) {
+      const t = toks[pos - 1];
+      const nn = node('UnaryExpr', { detail: '-', ...atLoc(t) });
+      add(nn, negExpr());
+      return nn;
+    }
+    return postfix();
+  }
+
+  function mulExpr() {
+    let e = negExpr();
+    while (at('TOKEN_STAR') || at('TOKEN_SLASH')) {
+      const op = next();
+      const bin = node('BinaryExpr', { detail: op.lex, ...atLoc(op) });
+      add(bin, e);
+      add(bin, negExpr());
+      e = bin;
+    }
+    return e;
+  }
+
+  function addExpr() {
+    let e = mulExpr();
+    while (at('TOKEN_PLUS') || at('TOKEN_MINUS')) {
+      const op = next();
+      const bin = node('BinaryExpr', { detail: op.lex, ...atLoc(op) });
+      add(bin, e);
+      add(bin, mulExpr());
+      e = bin;
+    }
+    return e;
+  }
+
   const COMP = new Set(['TOKEN_EQ', 'TOKEN_NEQ', 'TOKEN_GT', 'TOKEN_GTE', 'TOKEN_LT', 'TOKEN_LTE', 'TOKEN_EQUAL']);
 
   function comparison() {
-    let e = postfix();
+    let e = addExpr();
     if (COMP.has(peek().type)) {
       const op = next();
       const bin = node('BinaryExpr', { detail: op.lex, ...atLoc(op) });
       add(bin, e);
-      add(bin, postfix());
+      add(bin, addExpr());
       e = bin;
     }
     if (at('TOKEN_KW_WITHIN')) {
@@ -161,7 +195,8 @@ export function buildAst(tokens) {
     const nn = node('AlertAction', { detail: '', ...atLoc(kw) });
     match('TOKEN_COLON');
     if (!atEnd() && (at('TOKEN_STRING_LIT') || at('TOKEN_IDENTIFIER') ||
-        at('TOKEN_INT_LIT') || at('TOKEN_FLOAT_LIT') || at('TOKEN_DOT') || at('TOKEN_LPAREN'))) {
+        at('TOKEN_INT_LIT') || at('TOKEN_FLOAT_LIT') || at('TOKEN_DOT') ||
+        at('TOKEN_LPAREN') || at('TOKEN_MINUS'))) {
       add(nn, expression());
       while (at('TOKEN_COMMA')) { next(); add(nn, expression()); }
     }

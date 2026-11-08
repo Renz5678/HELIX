@@ -83,6 +83,10 @@ The initial HELIX language documentation contains several drafting ambiguities a
   - `terminology` accepts either the old `SYSTEM [ (args) ] [ "text" ]` form or one or more `name -> postfix_expr` mappings.
   - `bind site <name>` opens a block that closes with `end bind` and may contain `source`, `terminology` and `site` declarations.
 
+### 2.10 Arithmetic Expressions and Precedence
+- Arithmetic operators `+`, `-`, `*`, `/` and unary negation `-` (e.g., `-1`, `-B`) are supported in expressions per the language proposal.
+- Precedence follows conventional mathematical hierarchy: unary `-` (right-associative) binds tighter than multiplicative `*`, `/` (left-associative), which bind tighter than additive `+`, `-` (left-associative), which bind tighter than relational comparisons.
+
 ---
 
 ## 3. Lexical Specification
@@ -207,7 +211,7 @@ suppress_stmt        = "suppress" , [ ":" ] ,
 repeat_suppression   = "repeat_of" , ":" , IDENTIFIER , [ within_clause ] ;
 
 (* Expressions & Operator Precedence *)
-(* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)
+(* Precedence: (lowest) or -> and -> not -> comparison -> additive -> multiplicative -> unary_minus -> postfix -> primary (highest) *)
 
 expression           = or_expr ;
 
@@ -218,9 +222,16 @@ and_expr             = unary_expr , { "and" , unary_expr } ;
 unary_expr           = "not" , unary_expr
                      | comparison_expr ;
 
-comparison_expr      = postfix_expr , [ comp_op , postfix_expr ] , [ where_clause ] , [ within_clause ] ;
+comparison_expr      = add_expr , [ comp_op , add_expr ] , [ where_clause ] , [ within_clause ] ;
 
 comp_op              = "==" | "!=" | ">" | "<" | ">=" | "<=" | "=" ;
+
+add_expr             = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+
+mul_expr             = neg_expr , { ( "*" | "/" ) , neg_expr } ;
+
+neg_expr             = "-" , neg_expr
+                     | postfix_expr ;
 
 where_clause         = "where" , expression ;
 

@@ -67,10 +67,10 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_LT` | `<` | Less-than comparison | Comparison level |
 | `TOKEN_LTE` | `<=` | Less-than-or-equal comparison | Comparison level |
 | `TOKEN_ARROW` | `->` | Directional source / terminology concept mapping operator | Postfix / declaration |
-| `TOKEN_PLUS` | `+` | Addition arithmetic operator | Lexical level |
-| `TOKEN_MINUS` | `-` | Subtraction arithmetic operator | Lexical level |
-| `TOKEN_STAR` | `*` | Multiplication arithmetic operator | Lexical level |
-| `TOKEN_SLASH` | `/` | Division arithmetic operator | Lexical level |
+| `TOKEN_PLUS` | `+` | Addition arithmetic operator | Additive level |
+| `TOKEN_MINUS` | `-` | Subtraction / unary negation arithmetic operator | Additive / unary level |
+| `TOKEN_STAR` | `*` | Multiplication arithmetic operator | Multiplicative level |
+| `TOKEN_SLASH` | `/` | Division arithmetic operator | Multiplicative level |
 
 ---
 

@@ -49,7 +49,7 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
           /[a-zA-Z_][\w]*/,
           { cases: { "@keywords": "keyword", "@default": "identifier" } },
         ],
-        [/:=|==|!=|<=|>=|->|[=<>]/, "operator"],
+        [/:=|==|!=|<=|>=|->|[=<>+\-*/]/, "operator"],
         [/[.:,()[\]]/, "delimiter"],
       ],
     },

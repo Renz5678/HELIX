@@ -20,6 +20,8 @@ typedef enum {
     AST_AND,
     AST_UNARY,
     AST_COMPARISON,
+    AST_ADD,
+    AST_MUL,
     AST_POSTFIX,
     AST_PRIMARY,
     AST_WHERE,

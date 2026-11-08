@@ -230,6 +230,7 @@ end
 
 ### Operators & Delimiters
 - **Assignment:** `:=`, `=`
+- **Arithmetic:** `+`, `-` (binary and unary), `*`, `/`
 - **Comparison:** `==`, `!=`, `<`, `<=`, `>`, `>=`
 - **Mapping:** `->`
 - **Delimiters:** `:`, `.`, `,`, `(`, `)`, `[`, `]`
@@ -238,10 +239,13 @@ end
 Precedence is strictly enforced through recursive descent:
 1. `parse_expression()` / `parse_or_expr()`: Disjunction (`or`)
 2. `parse_and_expr()`: Conjunction (`and`)
-3. `parse_unary_expr()`: Negation (`not`)
-4. `parse_comparison_expr()`: Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`)
-5. `parse_postfix_expr()`: Navigation (`.field`, `->target`, `[index]`, `(args)`)
-6. `parse_primary_expr()`: Identifiers, literals, and grouped sub-expressions `( ... )`
+3. `parse_unary_expr()`: Logical negation (`not`)
+4. `parse_comparison_expr()`: Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `=`)
+5. `parse_add_expr()`: Addition and subtraction (`+`, `-`)
+6. `parse_mul_expr()`: Multiplication and division (`*`, `/`)
+7. `parse_neg_expr()`: Unary negation (`-`)
+8. `parse_postfix_expr()`: Navigation (`.field`, `->target`, `[index]`, `(args)`)
+9. `parse_primary_expr()`: Identifiers, literals, and grouped sub-expressions `( ... )`
 
 ---
 

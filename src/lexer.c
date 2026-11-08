@@ -165,6 +165,16 @@ static Token scan_number(Lexer *lexer) {
     return tok;
 }
 
+/* Agreed escapes: \n \t \r \\ \"  (adjust to the spec) */
+static bool is_valid_escape(char c) {
+    switch (c) {
+        case 'n': case 't': case 'r': case '\\': case '"':
+            return true;
+        default:
+            return false;
+    }
+}
+
 static Token scan_string(Lexer *lexer) {
     size_t start_col = lexer->column;
     size_t start_line = lexer->line;
@@ -180,6 +190,7 @@ static Token scan_string(Lexer *lexer) {
                 diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
                             "Unterminated string literal");
             }
+            /* Line break is left unconsumed so line/column tracking stays correct */
             return token_create(TOKEN_ERROR, "Unterminated string", start_line, start_col);
         }
 
@@ -200,13 +211,28 @@ static Token scan_string(Lexer *lexer) {
         }
 
         if (c == '\\') {
+            size_t esc_line = lexer->line;
+            size_t esc_col = lexer->column;
             advance_char(lexer); /* Consume backslash */
-            if (!is_at_end(lexer) && peek_char(lexer) != '\0') {
-                advance_char(lexer);
+
+            char esc = peek_char(lexer);
+            if (esc == '\0' || esc == '\n' || esc == '\r') {
+                /* Backslash before a line break/EOF is NOT a continuation.
+                   Don't consume it; the next iteration reports the unterminated string. */
+                continue;
             }
-        } else {
-            advance_char(lexer);
+            if (!is_valid_escape(esc)) {
+                if (lexer->diag) {
+                    diag_report(lexer->diag, DIAG_LEXICAL_ERROR, esc_line, esc_col,
+                                "Invalid escape sequence '\\%c'", esc);
+                }
+                had_error = true; /* keep scanning to the closing quote to avoid cascading errors */
+            }
+            advance_char(lexer); /* Consume the escaped character */
+            continue;
         }
+
+        advance_char(lexer);
     }
 
     size_t len = lexer->cursor - start_pos;

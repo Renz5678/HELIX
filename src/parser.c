@@ -316,18 +316,13 @@ static bool parse_neg_expr(Parser *parser) {
 }
 static bool impl_parse_mul_expr(Parser *parser);
 static bool parse_mul_expr(Parser *parser) {
-    if (++parser->depth > 256) {
-        --parser->depth;
-        error_at_current(parser, "Parser nesting limit exceeded");
-        return false;
-    }
+    /* Iterative precedence tier; recursive operands enforce the nesting limit. */
     AstNode *parent = parser->parent, *node = NULL;
     if (parser->ast) {
         node = ast_node_new(parser->ast, AST_MUL, parser->current);
         if (!node || !ast_append(parent, node)) {
             ast_node_free(node);
             parser->ast->failed = true;
-            --parser->depth;
             return false;
         }
         parser->parent = node;
@@ -336,23 +331,17 @@ static bool parse_mul_expr(Parser *parser) {
     if (node)
         node->end = parser->current;
     parser->parent = parent;
-    --parser->depth;
     return ok;
 }
 static bool impl_parse_add_expr(Parser *parser);
 static bool parse_add_expr(Parser *parser) {
-    if (++parser->depth > 256) {
-        --parser->depth;
-        error_at_current(parser, "Parser nesting limit exceeded");
-        return false;
-    }
+    /* Iterative precedence tier; recursive operands enforce the nesting limit. */
     AstNode *parent = parser->parent, *node = NULL;
     if (parser->ast) {
         node = ast_node_new(parser->ast, AST_ADD, parser->current);
         if (!node || !ast_append(parent, node)) {
             ast_node_free(node);
             parser->ast->failed = true;
-            --parser->depth;
             return false;
         }
         parser->parent = node;
@@ -361,7 +350,6 @@ static bool parse_add_expr(Parser *parser) {
     if (node)
         node->end = parser->current;
     parser->parent = parent;
-    --parser->depth;
     return ok;
 }
 static bool impl_parse_comparison_expr(Parser *parser);

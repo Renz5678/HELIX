@@ -61,8 +61,20 @@ The initial HELIX language documentation contains several drafting ambiguities a
   - A standalone `end` is not a valid complete block terminator.
   - Mismatched block terminators (e.g. `end rule` closing a `bind` block) produce a syntax error.
 
+### 2.7 Source and Terminology Concept Mapping (`->`, `[...]`, `(...)`)
+- **Analysis:** The language proposal (Page 3, §4.1, and §11) links local clinical concept names to external terminology systems using `->` and square brackets, allowing one or more mappings under a single `terminology` header (e.g., `terminology potassium -> LOINC["serum potassium"]`), and declares data interfaces via `source : FHIR_R4`. Existing repository examples and Studio fixtures also use direct terminology system declarations with parentheses (e.g., `terminology: LOINC("2339-0")` and `source: EHR -> FHIR_R4`).
+- **Decision:**
+  - `source_decl` accepts `source [:] IDENTIFIER [ "->" IDENTIFIER ] [ "(" [ argument_list ] ")" ]`, supporting both `source : FHIR_R4` and `source: EHR -> FHIR_R4`.
+  - `terminology_decl` accepts both:
+    1. **Concept-to-terminology mappings:** one or more `IDENTIFIER "->" terminology_ref` entries under `terminology [:]` (e.g., `terminology potassium -> LOINC["serum potassium"]`), where `terminology_ref` accepts bracketed (`SYSTEM[expression]`) or parenthesized (`SYSTEM([argument_list])`) selectors. In free-field layout, additional mappings under the same `terminology` header are consumed using two-token lookahead (`IDENTIFIER` followed by `->`).
+    2. **Direct terminology declarations:** `terminology [:] terminology_ref [ STRING_LITERAL ]` (e.g., `terminology: LOINC("2339-0")` or `terminology: LOINC["2339-0"]`).
 
-### 2.8 Event Triggers, `for` Binding, Alert Level and Terminology Mappings (HELIX-22)
+### 2.8 Targeted Repeat Suppression
+- `suppress repeat_of : HighGlucoseAlert within 4 hours` names the rule whose repeated notifications are suppressed. The `within` clause is optional.
+- `repeat_of` is contextual only when followed by `:` in a suppression statement; it remains an identifier elsewhere, preserving the 21 reserved words and existing suppression forms.
+- The parser validates syntax, not rule-name resolution or notification delivery. The timeline remains a preview of one rule's suppression window.
+
+### 2.9 Event Triggers, `for` Binding, Alert Level and Terminology Mappings (HELIX-22)
 - **Analysis:** The proposal's `Hyperkalemia_Alert` example uses `when Observation.created` (no `then`), `for patient : P`, `alert level : interruptive`, and several `name -> SYSTEM["term"]` mappings under one `terminology` header inside a `bind site ... end bind` block.
 - **Decision:**
   - `when <Name>.<member>` followed directly by another rule element or `end` is an event trigger. A `when` condition without `then` that is not of this shape is still a syntax error.
@@ -151,9 +163,14 @@ schedule_decl        = "schedule" , [ ":" ] , ( STRING_LITERAL | IDENTIFIER | du
 
 terminology_decl     = "terminology" , [ ":" ] ,
                        ( terminology_mapping , { terminology_mapping }
-                       | IDENTIFIER , [ "(" , [ argument_list ] , ")" ] , [ STRING_LITERAL ] ) ;
+                       | terminology_ref , [ STRING_LITERAL ] ) ;
 
-terminology_mapping  = IDENTIFIER , "->" , postfix_expr ;
+terminology_mapping  = IDENTIFIER , "->" , terminology_ref ;
+
+terminology_ref      = IDENTIFIER ,
+                       [ "(" , [ argument_list ] , ")"
+                       | "[" , expression , "]" ] ;
+
 site_decl            = "site" , [ ":" ] , ( IDENTIFIER | STRING_LITERAL ) ;
 
 source_decl          = "source" , [ ":" ] , IDENTIFIER , [ "->" , IDENTIFIER ] , [ "(" , [ argument_list ] , ")" ] ;
@@ -184,7 +201,10 @@ alert_stmt           = "alert" , [ ":" ] , ( alert_level | expression , { "," , 
 
 alert_level          = "level" , ":" , ( IDENTIFIER | STRING_LITERAL ) ;
 
-suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
+suppress_stmt        = "suppress" , [ ":" ] ,
+                       ( repeat_suppression | within_clause | duration_expr | IDENTIFIER | STRING_LITERAL ) ;
+
+repeat_suppression   = "repeat_of" , ":" , IDENTIFIER , [ within_clause ] ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)

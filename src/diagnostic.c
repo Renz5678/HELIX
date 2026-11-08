@@ -63,7 +63,8 @@ static bool diag_record(DiagnosticEngine *engine, DiagnosticKind kind,
 static char *copy(const char *s, size_t n) {
     char *p = malloc(n + 1);
     if (p) {
-        memcpy(p, s, n);
+        for (size_t i = 0; i < n; i++)
+            p[i] = s[i] ? s[i] : ' ';
         p[n] = 0;
     }
     return p;
@@ -130,10 +131,12 @@ void diag_report(DiagnosticEngine *e, DiagnosticKind kind, size_t line, size_t c
         }
     }
     if (e->out_stream) {
-        fprintf(e->out_stream, "%s:%zu:%zu: %s: %s\n",
+        fprintf(e->out_stream, "%s:%zu:%zu: %s: %s\n    ",
                 e->source && e->source->filename ? e->source->filename : "<input>", line, column,
                 label, message);
-        fprintf(e->out_stream, "    %.*s\n    ", (int)len, start);
+        for (size_t i = 0; i < len; i++)
+            fputc(start[i] ? start[i] : ' ', e->out_stream);
+        fprintf(e->out_stream, "\n    ");
         for (size_t i = 1; i < column; i++)
             fputc(i <= len && start[i - 1] == '\t' ? '\t' : ' ', e->out_stream);
         fprintf(e->out_stream, "^\n");

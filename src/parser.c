@@ -628,8 +628,11 @@ static bool parse_bind_decl(Parser *parser) {
         parser->parent = node;
     }
     bool ok = impl_parse_bind_decl(parser);
-    if (node)
+    if (node) {
+        if (node->count > 0 && node->children[0]->kind == AST_SITE)
+            node->kind = AST_SITE;
         node->end = parser->current;
+    }
     parser->parent = parent;
     --parser->depth;
     return ok;
@@ -1033,6 +1036,9 @@ static bool impl_parse_duration_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_STRING_LIT)) {
         return true;
     }
+    if (match_tok(parser, TOKEN_IDENTIFIER)) {
+        return true;
+    }
     error_at_current(parser, "Expected duration expression (e.g. 24 hours, \"30m\")");
     return false;
 }
@@ -1103,6 +1109,22 @@ static bool impl_parse_schedule_decl(Parser *parser) {
     return parse_duration_expr(parser);
 }
 
+static bool parse_terminology_selector(Parser *parser) {
+    if (match_tok(parser, TOKEN_LPAREN)) {
+        if (!check_tok(parser, TOKEN_RPAREN)) {
+            if (!parse_argument_list(parser))
+                return false;
+        }
+        return consume_tok(parser, TOKEN_RPAREN, "Expected ')' after terminology arguments");
+    }
+    if (match_tok(parser, TOKEN_LBRACKET)) {
+        if (!parse_expression(parser))
+            return false;
+        return consume_tok(parser, TOKEN_RBRACKET, "Expected ']' after terminology reference");
+    }
+    return true;
+}
+
 static bool impl_parse_terminology_decl(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_TERMINOLOGY, "Expected 'terminology'"))
         return false;
@@ -1118,18 +1140,30 @@ static bool impl_parse_terminology_decl(Parser *parser) {
         return true;
     }
     if (!consume_tok(parser, TOKEN_IDENTIFIER,
-                     "Expected terminology system name (e.g. LOINC, SNOMED)")) {
+                     "Expected terminology concept or system name (e.g. potassium, LOINC, SNOMED)")) {
         return false;
     }
-    if (match_tok(parser, TOKEN_LPAREN)) {
-        if (!check_tok(parser, TOKEN_RPAREN)) {
-            if (!parse_argument_list(parser))
-                return false;
-        }
-        if (!consume_tok(parser, TOKEN_RPAREN, "Expected ')' after terminology arguments")) {
+    if (match_tok(parser, TOKEN_ARROW)) {
+        if (!consume_tok(parser, TOKEN_IDENTIFIER,
+                         "Expected terminology system name after '->' (e.g. LOINC, SNOMED)")) {
             return false;
         }
+        if (!parse_terminology_selector(parser))
+            return false;
+        while (check_tok(parser, TOKEN_IDENTIFIER) && peek_next_tok(parser).type == TOKEN_ARROW) {
+            advance_tok(parser); /* Consume local concept identifier */
+            advance_tok(parser); /* Consume '->' */
+            if (!consume_tok(parser, TOKEN_IDENTIFIER,
+                             "Expected terminology system name after '->' (e.g. LOINC, SNOMED)")) {
+                return false;
+            }
+            if (!parse_terminology_selector(parser))
+                return false;
+        }
+        return true;
     }
+    if (!parse_terminology_selector(parser))
+        return false;
     if (check_tok(parser, TOKEN_STRING_LIT)) {
         advance_tok(parser);
     }
@@ -1174,17 +1208,20 @@ static bool impl_parse_source_decl(Parser *parser) {
 static bool impl_parse_bind_decl(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_BIND, "Expected 'bind'"))
         return false;
-        /* HELIX-22: bind site <name> { source | terminology | site } end bind */
     if (check_tok(parser, TOKEN_KW_SITE)) {
-        if (!parse_site_decl(parser))
-            return false;
-        while (check_tok(parser, TOKEN_KW_SOURCE) || check_tok(parser, TOKEN_KW_TERMINOLOGY) ||
-               check_tok(parser, TOKEN_KW_SITE)) {
-            bool ok = check_tok(parser, TOKEN_KW_SOURCE)      ? parse_source_decl(parser)
-                      : check_tok(parser, TOKEN_KW_TERMINOLOGY) ? parse_terminology_decl(parser)
-                                                                : parse_site_decl(parser);
-            if (!ok)
-                return false;
+        /* Configuration block: site/source/terminology declarations until 'end bind' */
+        while (!is_at_end(parser) && !check_tok(parser, TOKEN_KW_END)) {
+            TokenType t = peek_tok(parser).type;
+            bool ok;
+            if (t == TOKEN_KW_SITE) ok = parse_site_decl(parser);
+            else if (t == TOKEN_KW_SOURCE) ok = parse_source_decl(parser);
+            else if (t == TOKEN_KW_TERMINOLOGY) ok = parse_terminology_decl(parser);
+            else {
+                error_at_current(parser, "Unexpected token '%s' in 'bind site' block",
+                                 peek_tok(parser).lexeme);
+                ok = false;
+            }
+            if (!ok) return false;
         }
         return consume_block_end(parser, TOKEN_KW_BIND, "bind");
     }
@@ -1254,6 +1291,15 @@ static bool impl_parse_suppress_stmt(Parser *parser) {
         return parse_within_clause(parser);
     }
     if (match_tok(parser, TOKEN_STRING_LIT) || match_tok(parser, TOKEN_IDENTIFIER)) {
+        Token target = previous_tok(parser);
+        /* repeat_of is contextual; keep it usable as an ordinary identifier. */
+        if (target.type == TOKEN_IDENTIFIER && strcmp(target.lexeme, "repeat_of") == 0 &&
+            match_tok(parser, TOKEN_COLON)) {
+            if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected rule name after 'repeat_of :'")) {
+                return false;
+            }
+            if (check_tok(parser, TOKEN_KW_WITHIN)) return parse_within_clause(parser);
+        }
         return true;
     }
     return parse_duration_expr(parser);
@@ -1446,6 +1492,8 @@ static bool impl_parse_rule_decl(Parser *parser) {
 bool parser_parse(Parser *parser) {
     if (!parser)
         return false;
+
+    parser->depth = 0;
 
     if (is_at_end(parser)) {
         error_at_current(parser, "Empty program: expected at least one rule declaration");

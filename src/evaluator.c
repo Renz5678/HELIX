@@ -747,12 +747,18 @@ static void statement(Context *c, AstNode *node, size_t scope) {
         AstNode *d = find(n, AST_DURATION);
         double ms = -1;
         const char *reason = NULL;
+        size_t index = n->start + 1;
+        if (index < c->program->tokens.count && token(c, index)->type == TOKEN_COLON)
+            index++;
+        if (index + 2 < c->program->tokens.count &&
+            !strcmp(token(c, index)->lexeme, "repeat_of") &&
+            token(c, index + 1)->type == TOKEN_COLON &&
+            token(c, index + 2)->type == TOKEN_IDENTIFIER) {
+            reason = token(c, index + 2)->lexeme;
+        }
         if (d || child(n, AST_WITHIN))
             ms = duration(c, n);
-        else {
-            size_t index = n->start + 1;
-            if (token(c, index)->type == TOKEN_COLON)
-                index++;
+        else if (!reason) {
             Token *t = token(c, index);
             if (t->type == TOKEN_STRING_LIT)
                 reason = literal(c, t->lexeme);

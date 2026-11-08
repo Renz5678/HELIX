@@ -13,9 +13,13 @@ void lexer_init(Lexer *lexer, const SourceBuffer *source, DiagnosticEngine *diag
     lexer->column = 1;
 }
 
+static bool is_at_end(const Lexer *lexer) {
+    if (!lexer || !lexer->source || !lexer->source->content) return true;
+    return lexer->cursor >= lexer->source->length;
+}
+
 static char peek_char(const Lexer *lexer) {
-    if (!lexer->source || !lexer->source->content) return '\0';
-    if (lexer->cursor >= lexer->source->length) return '\0';
+    if (is_at_end(lexer)) return '\0';
     return lexer->source->content[lexer->cursor];
 }
 
@@ -26,8 +30,8 @@ static char peek_next(const Lexer *lexer) {
 }
 
 static char advance_char(Lexer *lexer) {
+    if (is_at_end(lexer)) return '\0';
     char c = peek_char(lexer);
-    if (c == '\0') return '\0';
 
     lexer->cursor++;
     if (c == '\n' || (c == '\r' && peek_char(lexer) != '\n')) {
@@ -40,13 +44,13 @@ static char advance_char(Lexer *lexer) {
 }
 
 static void skip_whitespace_and_comments(Lexer *lexer) {
-    while (true) {
+    while (!is_at_end(lexer)) {
         char c = peek_char(lexer);
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
             advance_char(lexer);
         } else if (c == '#') {
-            /* Comment: skip until newline or EOF */
-            while (peek_char(lexer) != '\0' && peek_char(lexer) != '\n') {
+            /* Comment: skip until newline, embedded NUL, or EOF */
+            while (!is_at_end(lexer) && peek_char(lexer) != '\0' && peek_char(lexer) != '\n') {
                 advance_char(lexer);
             }
         } else {
@@ -180,16 +184,25 @@ static Token scan_string(Lexer *lexer) {
     advance_char(lexer); /* Consume opening quote '"' */
 
     while (true) {
-        char c = peek_char(lexer);
-
-        /* EOF or a real line break (LF or CR, so CRLF behaves like LF) */
-        if (c == '\0' || c == '\n' || c == '\r') {
+        if (is_at_end(lexer) || peek_char(lexer) == '\n' || peek_char(lexer) == '\r') {
+            /* Unterminated string literal */
             if (lexer->diag) {
                 diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
                             "Unterminated string literal");
             }
             /* Line break is left unconsumed so line/column tracking stays correct */
             return token_create(TOKEN_ERROR, "Unterminated string", start_line, start_col);
+        }
+
+        char c = peek_char(lexer);
+        if (c == '\0') {
+            if (lexer->diag) {
+                diag_report(lexer->diag, DIAG_LEXICAL_ERROR, lexer->line, lexer->column,
+                            "Unrecognized character '\\x00' (0x00)");
+            }
+            had_error = true;
+            advance_char(lexer);
+            continue;
         }
 
         if (c == '"') {
@@ -227,11 +240,13 @@ static Token scan_string(Lexer *lexer) {
     if (!buf) {
         return token_create(TOKEN_ERROR, "Out of memory", start_line, start_col);
     }
-    memcpy(buf, &lexer->source->content[start_pos], len);
+    for (size_t i = 0; i < len; i++) {
+        char ch = lexer->source->content[start_pos + i];
+        buf[i] = ch ? ch : ' ';
+    }
     buf[len] = '\0';
 
-    Token tok = token_create(had_error ? TOKEN_ERROR : TOKEN_STRING_LIT,
-                             buf, start_line, start_col);
+    Token tok = token_create(had_error ? TOKEN_ERROR : TOKEN_STRING_LIT, buf, start_line, start_col);
     free(buf);
     return tok;
 }
@@ -241,11 +256,12 @@ static Token lexer_next_raw(Lexer *lexer) {
 
     size_t start_col = lexer->column;
     size_t start_line = lexer->line;
-    char c = peek_char(lexer);
 
-    if (c == '\0') {
+    if (is_at_end(lexer)) {
         return token_create(TOKEN_EOF, "", start_line, start_col);
     }
+
+    char c = peek_char(lexer);
 
     /* Identifiers and reserved words */
     if (isalpha((unsigned char)c) || c == '_') {
@@ -347,7 +363,7 @@ static Token lexer_next_raw(Lexer *lexer) {
                 size_t i=1;while(i<width&&((unsigned char)peek_char(lexer)&0xC0)==0x80)lexeme[i++]=advance_char(lexer);
                 lexeme[i]=0;
                 if(i!=width)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
-            }else if(lead>=128)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
+            }else if(lead>=128||lead==0)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
             if (lexer->diag) {
                 diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
                             "Unrecognized character '%s' (0x%02X)", lexeme, (unsigned char)c);

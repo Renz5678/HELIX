@@ -1,0 +1,4 @@
+# Invalid: Missing observation type after latest (HELIX-17)
+rule MissingObsType:
+    latest where code = potassium within 24 hours before now
+end rule

@@ -172,13 +172,18 @@ export function buildAst(tokens) {
     const kw = next();
     const nn = node('SuppressAction', { detail: '', ...atLoc(kw) });
     match('TOKEN_COLON');
+    const repeat = at('TOKEN_IDENTIFIER') && peek().lex === 'repeat_of' && at('TOKEN_COLON', 1);
+    if (repeat) {
+      next(); next();
+      if (at('TOKEN_IDENTIFIER')) nn.detail = `repeat_of : ${next().lex}`;
+    }
     if (match('TOKEN_KW_WITHIN')) {
       const d = add(nn, duration());
       if (d) {
         const unit = d.children[0] ? ' ' + d.children[0].detail : '';
-        nn.detail = `within ${d.detail}${unit}`;
+        nn.detail += `${repeat ? ' ' : ''}within ${d.detail}${unit}`;
       }
-    } else if (at('TOKEN_STRING_LIT') || at('TOKEN_IDENTIFIER')) {
+    } else if (!repeat && (at('TOKEN_STRING_LIT') || at('TOKEN_IDENTIFIER'))) {
       nn.detail = next().lex;
     }
     return nn;
@@ -198,6 +203,7 @@ export function buildAst(tokens) {
 
     if (match('TOKEN_KW_THEN')) {
       const thenB = node('ThenBranch', { detail: 'then', ...atLoc(toks[pos - 1]) });
+      match('TOKEN_COLON');
       while (!atEnd() && BRANCH_START.has(peek().type)) {
         const s = statement();
         if (!s) break;
@@ -207,6 +213,7 @@ export function buildAst(tokens) {
     }
     if (match('TOKEN_KW_OTHERWISE')) {
       const elseB = node('OtherwiseBranch', { detail: 'otherwise', ...atLoc(toks[pos - 1]) });
+      match('TOKEN_COLON');
       while (!atEnd() && BRANCH_START.has(peek().type)) {
         const s = statement();
         if (!s) break;
@@ -214,6 +221,7 @@ export function buildAst(tokens) {
       }
       add(nn, elseB);
     }
+    if (at('TOKEN_KW_END') && at('TOKEN_KW_WHEN', 1)) { next(); next(); }
     return nn;
   }
 
@@ -249,21 +257,41 @@ export function buildAst(tokens) {
       case 'TOKEN_KW_TERMINOLOGY': {
         next(); match('TOKEN_COLON');
         const nn = node('TerminologyNode', atLoc(t));
-        if (at('TOKEN_IDENTIFIER')) {
-          nn.detail = next().lex;
-          if (match('TOKEN_LPAREN')) {
-            const args = [];
-            while (!atEnd() && !at('TOKEN_RPAREN')) {
-              if (at('TOKEN_STRING_LIT')) args.push(`"${next().lex}"`);
-              else if (at('TOKEN_IDENTIFIER')) args.push(next().lex);
-              else if (at('TOKEN_INT_LIT') || at('TOKEN_FLOAT_LIT')) args.push(next().lex);
-              else break;
-              if (!match('TOKEN_COMMA')) break;
-            }
-            match('TOKEN_RPAREN');
-            if (args.length) nn.detail += `(${args.join(', ')})`;
+        const fmtStr = (s) => (s.startsWith('"') ? s : `"${s}"`);
+        const readSelector = () => {
+          const open = at('TOKEN_LPAREN') ? 'TOKEN_LPAREN' : at('TOKEN_LBRACKET') ? 'TOKEN_LBRACKET' : null;
+          if (!open) return '';
+          const close = open === 'TOKEN_LPAREN' ? 'TOKEN_RPAREN' : 'TOKEN_RBRACKET';
+          next();
+          const args = [];
+          while (!atEnd() && !at(close)) {
+            if (at('TOKEN_STRING_LIT')) args.push(fmtStr(next().lex));
+            else if (at('TOKEN_IDENTIFIER') || at('TOKEN_INT_LIT') || at('TOKEN_FLOAT_LIT')) args.push(next().lex);
+            else break;
+            if (!match('TOKEN_COMMA')) break;
           }
-        } else if (at('TOKEN_STRING_LIT')) nn.detail = `"${next().lex}"`;
+          match(close);
+          return open === 'TOKEN_LPAREN' ? `(${args.join(', ')})` : `[${args.join(', ')}]`;
+        };
+        if (at('TOKEN_IDENTIFIER') && at('TOKEN_ARROW', 1)) {
+          const mappings = [];
+          while (!atEnd() && at('TOKEN_IDENTIFIER') && at('TOKEN_ARROW', 1)) {
+            const loc = atLoc(peek());
+            const concept = next().lex;
+            next(); /* consume '->' */
+            const sys = at('TOKEN_IDENTIFIER') ? next().lex : '';
+            const sel = readSelector();
+            const entry = `${concept} -> ${sys}${sel}`;
+            mappings.push(entry);
+            add(nn, node('TerminologyMapping', { detail: entry, ...loc }));
+          }
+          nn.detail = mappings.join(', ');
+        } else if (at('TOKEN_IDENTIFIER')) {
+          nn.detail = next().lex + readSelector();
+          if (at('TOKEN_STRING_LIT')) next();
+        } else if (at('TOKEN_STRING_LIT')) {
+          nn.detail = fmtStr(next().lex);
+        }
         add(rule, nn);
         return;
       }
@@ -290,6 +318,7 @@ export function buildAst(tokens) {
           add(nn, where);
         }
         if (at('TOKEN_KW_WITHIN')) { next(); add(nn, duration()); }
+        if (at('TOKEN_KW_END') && at('TOKEN_KW_BIND', 1)) { next(); next(); }
         add(rule, nn);
         return;
       }
@@ -317,6 +346,7 @@ export function buildAst(tokens) {
         if (pos === before) { failed = `unexpected token "${peek().lex}"`; break; }
       }
       if (!match('TOKEN_KW_END') && !failed) failed = `missing 'end' for rule ${rule.detail}`;
+      else match('TOKEN_KW_RULE');
       add(program, rule);
       if (failed) break;
     } else {

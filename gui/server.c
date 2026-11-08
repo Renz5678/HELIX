@@ -167,7 +167,7 @@ static const char *diag_severity(DiagnosticKind k) {
 /* ------------------------------------------------------------------ */
 static char *analyze_to_json(const char *code, size_t code_len, size_t *out_len) {
     SourceBuffer src;
-    if (!source_from_string("input.helix", code, &src)) return NULL;
+    if (!source_from_memory("input.helix", code, code_len, &src)) return NULL;
 
     DiagnosticEngine diag;
     diag_init(&diag, &src, NULL);           /* record structured entries, no console I/O */

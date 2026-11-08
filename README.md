@@ -158,6 +158,7 @@ To resolve discrepancies between informal documentation examples and formal defi
 3. **Optional Colons:** Colons following declaration headers (`rule Name:`, `intent:`, `when:`, `then:`, `otherwise:`) are optional to support both idiomatic styles.
 4. **Member Navigation on Keywords (`.latest`):** The property access grammar rule (`primary "." member_name`) contextually accepts keywords like `latest` or `source` after `.`, keeping the scanner context-free.
 5. **Explicit Block-Specific Terminators:** Blocks are explicitly terminated with matching descriptors (`end rule`, `end bind`, `end when`). Generic standalone `end` or mismatched terminators are rejected.
+6. **Source and Terminology Concept Mappings (`->`, `[...]`, `(...)`):** `source` supports both `source : FHIR_R4` and directional feed declarations (`source: EHR -> FHIR_R4`). `terminology` supports both proposal concept-to-terminology mappings (`terminology potassium -> LOINC["serum potassium"]`, including multiple mappings under a single `terminology` header) and direct code-system declarations (`terminology: LOINC("2339-0")`).
 
 Full formal definitions are available in [docs/grammar.md](docs/grammar.md) and [docs/token_reference.md](docs/token_reference.md).
 

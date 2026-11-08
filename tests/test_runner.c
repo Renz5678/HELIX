@@ -889,6 +889,123 @@ static bool test_helix36_neg_site_without_name(void) {
     return test_parse_string(code, false);
 }
 
+/* --- HELIX-14 Unit Tests: Source & Terminology Mapping Syntax --- */
+
+static bool test_helix14_terminology_mapping(void) {
+    /* 1. Proposal Page 3 / Section 4.1 single concept mapping */
+    TEST_ASSERT(test_string_validation(
+        "rule Hyperkalemia_Alert\n"
+        "    source : FHIR_R4\n"
+        "    terminology\n"
+        "        potassium -> LOINC[\"serum potassium\"]\n"
+        "end rule\n", true),
+        "Proposal Page 3 single concept -> LOINC[...] mapping");
+
+    /* 2. Proposal Section 11 multiple mappings under one terminology header */
+    TEST_ASSERT(test_string_validation(
+        "rule MultiMapping:\n"
+        "    source : FHIR_R4\n"
+        "    terminology\n"
+        "        potassium -> LOINC[\"serum potassium\"]\n"
+        "        sodium -> LOINC[\"2951-2\"]\n"
+        "        sepsis -> SNOMED[\"91302008\"]\n"
+        "    let threshold := 6.0\n"
+        "end rule\n", true),
+        "Multiple concept mappings under a single terminology header");
+
+    /* 3. Free-field single-line multi-mapping followed by next statement */
+    TEST_ASSERT(test_string_validation(
+        "rule FreeFieldMapping terminology potassium -> LOINC[\"2823-3\"] sodium -> LOINC[\"2951-2\"] let x := 1 end rule",
+        true),
+        "Free-field single-line multi-mapping stops cleanly before let");
+
+    /* 4. Optional colon and parenthesized code selector on concept mapping */
+    TEST_ASSERT(test_string_validation(
+        "rule ColonParenMapping:\n"
+        "    terminology: potassium -> LOINC(\"2823-3\")\n"
+        "end rule\n", true),
+        "Concept mapping with optional colon and parenthesized code");
+
+    /* 5. Backward compatibility with existing direct terminology forms */
+    TEST_ASSERT(test_string_validation(
+        "rule LegacyTerminology:\n"
+        "    source: EHR -> FHIR_R4\n"
+        "    terminology: LOINC(\"2339-0\")\n"
+        "    terminology: SNOMED[\"91302008\"]\n"
+        "    terminology LOINC(\"2339-0\") \"Glucose\"\n"
+        "end rule\n", true),
+        "Existing direct terminology forms remain valid");
+
+    /* 6. AST span covers full terminology mapping declaration */
+    {
+        SourceBuffer src;
+        source_from_string("h14_ast",
+            "rule AstCheck\n"
+            "    terminology\n"
+            "        potassium -> LOINC[\"serum potassium\"]\n"
+            "        sodium -> LOINC[\"2951-2\"]\n"
+            "    let x := 1\n"
+            "end rule\n", &src);
+        DiagnosticEngine diag;
+        diag_init(&diag, &src, NULL);
+        Lexer lexer;
+        lexer_init(&lexer, &src, &diag);
+        TokenList tokens;
+        TEST_ASSERT(lexer_tokenize_all(&lexer, &tokens), "h14_ast lexes cleanly");
+        Parser parser;
+        parser_init(&parser, &tokens, &diag);
+        AstProgram *ast = parser_build_ast(&parser);
+        TEST_ASSERT(ast != NULL && !ast->failed, "AST builds cleanly for multi-mapping terminology");
+        TEST_ASSERT(ast->root->count == 1 && ast->root->children[0]->count == 2,
+                    "Rule AST has AST_TERMINOLOGY and AST_LET element wrappers");
+        TEST_ASSERT(ast->root->children[0]->children[0]->count == 1 &&
+                    ast->root->children[0]->children[0]->children[0]->kind == AST_TERMINOLOGY,
+                    "First rule element unwraps to AST_TERMINOLOGY");
+        TEST_ASSERT(ast->root->children[0]->children[1]->count == 1 &&
+                    ast->root->children[0]->children[1]->children[0]->kind == AST_LET,
+                    "Second rule element unwraps to AST_LET");
+        ast_program_free(ast);
+        token_list_free(&tokens);
+        diag_free(&diag);
+        source_free(&src);
+    }
+
+    /* 7. Negative cases: malformed mappings must be rejected */
+    TEST_ASSERT(test_string_validation(
+        "rule Bad1:\n"
+        "    terminology potassium ->\n"
+        "end rule\n", false),
+        "Reject missing target system after '->'");
+
+    TEST_ASSERT(test_string_validation(
+        "rule Bad2:\n"
+        "    terminology potassium -> LOINC[\"serum potassium\"\n"
+        "end rule\n", false),
+        "Reject unclosed '[' in terminology reference");
+
+    TEST_ASSERT(test_string_validation(
+        "rule Bad3:\n"
+        "    terminology potassium -> LOINC[]\n"
+        "end rule\n", false),
+        "Reject empty '[]' in terminology reference");
+
+    TEST_ASSERT(test_string_validation(
+        "rule Bad4:\n"
+        "    terminology -> LOINC[\"serum potassium\"]\n"
+        "end rule\n", false),
+        "Reject missing local concept name before '->'");
+
+    TEST_ASSERT(test_string_validation(
+        "rule Bad5:\n"
+        "    terminology\n"
+        "        potassium -> LOINC[\"2823-3\"]\n"
+        "        sodium ->\n"
+        "end rule\n", false),
+        "Reject incomplete second mapping in multi-mapping block");
+
+    return true;
+}
+
 int main(void) {
     printf("========================================\n");
     printf(" HELIX Test Suite (Automated Verification)\n");
@@ -919,6 +1036,7 @@ int main(void) {
     run_test("HELIX-38: Spacing and Expressions", test_helix38_spacing_and_expressions);
     run_test("HELIX-38: Jira Reproduction Snippets", test_helix38_jira_reproduction);
     run_test("HELIX-38: Edge Cases and Invariants", test_helix38_edge_cases);
+    run_test("HELIX-14: Source and Terminology Mappings", test_helix14_terminology_mapping);
 
     /* HELIX-17 Unit Tests */
     run_test("HELIX-17: Valid Latest Observation Query", test_helix17_valid_latest_query_multiline);

@@ -60,12 +60,29 @@ The initial HELIX language documentation contains several drafting ambiguities a
   - `end when` closes a conditional block.
   - A standalone `end` is not a valid complete block terminator.
   - Mismatched block terminators (e.g. `end rule` closing a `bind` block) produce a syntax error.
-### 2.7 Named Repeat-Alert Suppression (`repeat_of`)
-- **Analysis:** The proposal's example `suppress repeat_of : R` names a rule whose repeat alerts should be suppressed. `repeat_of` is not among the 21 reserved words, and the colon-separated form was rejected by the parser.
+
+### 2.7 Source and Terminology Concept Mapping (`->`, `[...]`, `(...)`)
+- **Analysis:** The language proposal (Page 3, §4.1, and §11) links local clinical concept names to external terminology systems using `->` and square brackets, allowing one or more mappings under a single `terminology` header (e.g., `terminology potassium -> LOINC["serum potassium"]`), and declares data interfaces via `source : FHIR_R4`. Existing repository examples and Studio fixtures also use direct terminology system declarations with parentheses (e.g., `terminology: LOINC("2339-0")` and `source: EHR -> FHIR_R4`).
 - **Decision:**
-  - The format `suppress repeat_of : <rule name>` is retained and accepted as a whole instruction.
-  - `repeat_of` stays a contextual identifier: it lexes as `IDENTIFIER` and is recognized only directly after `suppress` when followed by `:`. No new reserved keyword is introduced.
-  - `suppress repeat_of : R` requires the rule name after the colon. Other `identifier : identifier` forms after `suppress` remain syntax errors.
+  - `source_decl` accepts `source [:] IDENTIFIER [ "->" IDENTIFIER ] [ "(" [ argument_list ] ")" ]`, supporting both `source : FHIR_R4` and `source: EHR -> FHIR_R4`.
+  - `terminology_decl` accepts both:
+    1. **Concept-to-terminology mappings:** one or more `IDENTIFIER "->" terminology_ref` entries under `terminology [:]` (e.g., `terminology potassium -> LOINC["serum potassium"]`), where `terminology_ref` accepts bracketed (`SYSTEM[expression]`) or parenthesized (`SYSTEM([argument_list])`) selectors. In free-field layout, additional mappings under the same `terminology` header are consumed using two-token lookahead (`IDENTIFIER` followed by `->`).
+    2. **Direct terminology declarations:** `terminology [:] terminology_ref [ STRING_LITERAL ]` (e.g., `terminology: LOINC("2339-0")` or `terminology: LOINC["2339-0"]`).
+
+### 2.8 Targeted Repeat Suppression
+- `suppress repeat_of : HighGlucoseAlert within 4 hours` names the rule whose repeated notifications are suppressed. The `within` clause is optional.
+- `repeat_of` is contextual only when followed by `:` in a suppression statement; it remains an identifier elsewhere, preserving the 21 reserved words and existing suppression forms.
+- The parser validates syntax, not rule-name resolution or notification delivery. The timeline remains a preview of one rule's suppression window.
+
+### 2.9 Event Triggers, `for` Binding, Alert Level and Terminology Mappings (HELIX-22)
+- **Analysis:** The proposal's `Hyperkalemia_Alert` example uses `when Observation.created` (no `then`), `for patient : P`, `alert level : interruptive`, and several `name -> SYSTEM["term"]` mappings under one `terminology` header inside a `bind site ... end bind` block.
+- **Decision:**
+  - `when <Name>.<member>` followed directly by another rule element or `end` is an event trigger. A `when` condition without `then` that is not of this shape is still a syntax error.
+  - `for <name> [:] <Type>` is a rule element.
+  - `level` is a contextual identifier (not a 22nd keyword). `alert level : <name | "text">` sets the alert level; any other `alert` operand is an expression as before.
+  - `terminology` accepts either the old `SYSTEM [ (args) ] [ "text" ]` form or one or more `name -> postfix_expr` mappings.
+  - `bind site <name>` opens a block that closes with `end bind` and may contain `source`, `terminology` and `site` declarations.
+
 ---
 
 ## 3. Lexical Specification
@@ -134,6 +151,8 @@ rule_element         = intent_decl
                      | bind_decl
                      | let_decl
                      | when_stmt
+                     | event_trigger
+                     | for_decl
                      | action_stmt
                      | latest_query ;
 
@@ -142,14 +161,26 @@ intent_decl          = "intent" , [ ":" ] , STRING_LITERAL ;
 
 schedule_decl        = "schedule" , [ ":" ] , ( STRING_LITERAL | IDENTIFIER | duration_expr ) ;
 
-terminology_decl     = "terminology" , [ ":" ] , IDENTIFIER , [ "(" , [ argument_list ] , ")" ] , [ STRING_LITERAL ] ;
+terminology_decl     = "terminology" , [ ":" ] ,
+                       ( terminology_mapping , { terminology_mapping }
+                       | terminology_ref , [ STRING_LITERAL ] ) ;
+
+terminology_mapping  = IDENTIFIER , "->" , terminology_ref ;
+
+terminology_ref      = IDENTIFIER ,
+                       [ "(" , [ argument_list ] , ")"
+                       | "[" , expression , "]" ] ;
 
 site_decl            = "site" , [ ":" ] , ( IDENTIFIER | STRING_LITERAL ) ;
 
 source_decl          = "source" , [ ":" ] , IDENTIFIER , [ "->" , IDENTIFIER ] , [ "(" , [ argument_list ] , ")" ] ;
 
-bind_decl            = "bind" , IDENTIFIER , [ ":=" | "=" | ":" | "->" ] , postfix_expr , [ where_clause ] , [ within_clause ] , "end" , "bind" ;
+bind_decl            = "bind" , IDENTIFIER , [ ":=" | "=" | ":" | "->" ] , postfix_expr , [ where_clause ] , [ within_clause ] , "end" , "bind"
+                     | "bind" , site_decl , { source_decl | terminology_decl | site_decl } , "end" , "bind" ;
 
+for_decl             = "for" , IDENTIFIER , [ ":" ] , IDENTIFIER ;
+
+event_trigger        = "when" , IDENTIFIER , "." , member_name , { "." , member_name } ;
 let_decl             = "let" , IDENTIFIER , ( ":=" | "=" ) , expression ;
 
 (* Conditional and Control Flow *)
@@ -166,11 +197,14 @@ statement_in_branch  = let_decl
 (* Actions *)
 action_stmt          = alert_stmt | suppress_stmt ;
 
-alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
+alert_stmt           = "alert" , [ ":" ] , ( alert_level | expression , { "," , expression } ) ;
 
-suppress_stmt        = "suppress" , [ ":" ] , ( "within" , duration_expr | repeat_of_spec | IDENTIFIER | STRING_LITERAL | duration_expr ) ;
+alert_level          = "level" , ":" , ( IDENTIFIER | STRING_LITERAL ) ;
 
-repeat_of_spec       = "repeat_of" , ":" , IDENTIFIER ;
+suppress_stmt        = "suppress" , [ ":" ] ,
+                       ( repeat_suppression | within_clause | duration_expr | IDENTIFIER | STRING_LITERAL ) ;
+
+repeat_suppression   = "repeat_of" , ":" , IDENTIFIER , [ within_clause ] ;
 
 (* Expressions & Operator Precedence *)
 (* Precedence: (lowest) or -> and -> not -> comparison -> postfix -> primary (highest) *)

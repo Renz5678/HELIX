@@ -42,3 +42,6 @@ __pycache__/
 .vscode/
 *.swp
 Thumbs.db
+
+# Local development screenshots and test evidence
+/dev-docs/

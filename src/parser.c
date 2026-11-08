@@ -1031,6 +1031,9 @@ static bool impl_parse_duration_expr(Parser *parser) {
     if (match_tok(parser, TOKEN_STRING_LIT)) {
         return true;
     }
+    if (match_tok(parser, TOKEN_IDENTIFIER)) {
+        return true;
+    }
     error_at_current(parser, "Expected duration expression (e.g. 24 hours, \"30m\")");
     return false;
 }

@@ -74,6 +74,15 @@ The initial HELIX language documentation contains several drafting ambiguities a
 - `repeat_of` is contextual only when followed by `:` in a suppression statement; it remains an identifier elsewhere, preserving the 21 reserved words and existing suppression forms.
 - The parser validates syntax, not rule-name resolution or notification delivery. The timeline remains a preview of one rule's suppression window.
 
+### 2.9 Event Triggers, `for` Binding, Alert Level and Terminology Mappings (HELIX-22)
+- **Analysis:** The proposal's `Hyperkalemia_Alert` example uses `when Observation.created` (no `then`), `for patient : P`, `alert level : interruptive`, and several `name -> SYSTEM["term"]` mappings under one `terminology` header inside a `bind site ... end bind` block.
+- **Decision:**
+  - `when <Name>.<member>` followed directly by another rule element or `end` is an event trigger. A `when` condition without `then` that is not of this shape is still a syntax error.
+  - `for <name> [:] <Type>` is a rule element.
+  - `level` is a contextual identifier (not a 22nd keyword). `alert level : <name | "text">` sets the alert level; any other `alert` operand is an expression as before.
+  - `terminology` accepts either the old `SYSTEM [ (args) ] [ "text" ]` form or one or more `name -> postfix_expr` mappings.
+  - `bind site <name>` opens a block that closes with `end bind` and may contain `source`, `terminology` and `site` declarations.
+
 ---
 
 ## 3. Lexical Specification
@@ -142,6 +151,8 @@ rule_element         = intent_decl
                      | bind_decl
                      | let_decl
                      | when_stmt
+                     | event_trigger
+                     | for_decl
                      | action_stmt
                      | latest_query ;
 
@@ -164,8 +175,12 @@ site_decl            = "site" , [ ":" ] , ( IDENTIFIER | STRING_LITERAL ) ;
 
 source_decl          = "source" , [ ":" ] , IDENTIFIER , [ "->" , IDENTIFIER ] , [ "(" , [ argument_list ] , ")" ] ;
 
-bind_decl            = "bind" , IDENTIFIER , [ ":=" | "=" | ":" | "->" ] , postfix_expr , [ where_clause ] , [ within_clause ] , "end" , "bind" ;
+bind_decl            = "bind" , IDENTIFIER , [ ":=" | "=" | ":" | "->" ] , postfix_expr , [ where_clause ] , [ within_clause ] , "end" , "bind"
+                     | "bind" , site_decl , { source_decl | terminology_decl | site_decl } , "end" , "bind" ;
 
+for_decl             = "for" , IDENTIFIER , [ ":" ] , IDENTIFIER ;
+
+event_trigger        = "when" , IDENTIFIER , "." , member_name , { "." , member_name } ;
 let_decl             = "let" , IDENTIFIER , ( ":=" | "=" ) , expression ;
 
 (* Conditional and Control Flow *)
@@ -182,7 +197,9 @@ statement_in_branch  = let_decl
 (* Actions *)
 action_stmt          = alert_stmt | suppress_stmt ;
 
-alert_stmt           = "alert" , [ ":" ] , expression , { "," , expression } ;
+alert_stmt           = "alert" , [ ":" ] , ( alert_level | expression , { "," , expression } ) ;
+
+alert_level          = "level" , ":" , ( IDENTIFIER | STRING_LITERAL ) ;
 
 suppress_stmt        = "suppress" , [ ":" ] ,
                        ( repeat_suppression | within_clause | duration_expr | IDENTIFIER | STRING_LITERAL ) ;

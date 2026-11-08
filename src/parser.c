@@ -180,6 +180,8 @@ static void synchronize(Parser *parser) {
 }
 
 /* Forward declarations */
+static bool is_rule_element_start(TokenType t);
+static bool is_member_name_token(TokenType t);
 static bool parse_rule_decl(Parser *parser);
 static bool parse_rule_element(Parser *parser);
 static bool parse_intent_decl(Parser *parser);
@@ -1127,6 +1129,16 @@ static bool impl_parse_terminology_decl(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_TERMINOLOGY, "Expected 'terminology'"))
         return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
+        /* HELIX-22: mapping list: name -> SYSTEM["term"] */
+    if (check_tok(parser, TOKEN_IDENTIFIER) && peek_next_tok(parser).type == TOKEN_ARROW) {
+        while (check_tok(parser, TOKEN_IDENTIFIER) && peek_next_tok(parser).type == TOKEN_ARROW) {
+            advance_tok(parser); /* name */
+            advance_tok(parser); /* -> */
+            if (!parse_postfix_expr(parser))
+                return false;
+        }
+        return true;
+    }
     if (!consume_tok(parser, TOKEN_IDENTIFIER,
                      "Expected terminology concept or system name (e.g. potassium, LOINC, SNOMED)")) {
         return false;
@@ -1252,6 +1264,16 @@ static bool impl_parse_alert_stmt(Parser *parser) {
     if (!consume_tok(parser, TOKEN_KW_ALERT, "Expected 'alert'"))
         return false;
     match_tok(parser, TOKEN_COLON); /* Optional colon */
+        /* HELIX-22: alert level : <name | "text"> */
+    if (check_tok(parser, TOKEN_IDENTIFIER) && strcmp(peek_tok(parser).lexeme, "level") == 0 &&
+        peek_next_tok(parser).type == TOKEN_COLON) {
+        advance_tok(parser); /* level */
+        advance_tok(parser); /* : */
+        if (match_tok(parser, TOKEN_IDENTIFIER) || match_tok(parser, TOKEN_STRING_LIT))
+            return true;
+        error_at_current(parser, "Expected alert level name after 'level :'");
+        return false;
+    }
     if (!parse_expression(parser))
         return false;
     while (match_tok(parser, TOKEN_COMMA)) {
@@ -1375,9 +1397,49 @@ static bool is_rule_element_start(TokenType t) {
             t == TOKEN_KW_BIND ||
             t == TOKEN_KW_LET ||
             t == TOKEN_KW_WHEN ||
+            t == TOKEN_KW_FOR ||
             t == TOKEN_KW_ALERT ||
             t == TOKEN_KW_SUPPRESS ||
             t == TOKEN_KW_LATEST);
+}
+
+/* HELIX-22: 'when Event.name' with no 'then' is an event trigger */
+static bool is_event_trigger_ahead(const Parser *parser) {
+    const TokenList *tl = parser->tokens;
+    size_t i = parser->current;
+    size_t dots = 0;
+    if (!tl || i >= tl->count || tl->items[i].type != TOKEN_KW_WHEN)
+        return false;
+    i++;
+    if (i >= tl->count || tl->items[i].type != TOKEN_IDENTIFIER)
+        return false;
+    i++;
+    while (i + 1 < tl->count && tl->items[i].type == TOKEN_DOT &&
+           is_member_name_token(tl->items[i + 1].type)) {
+        dots++;
+        i += 2;
+    }
+    if (dots == 0 || i >= tl->count)
+        return false;
+    return tl->items[i].type == TOKEN_KW_END || is_rule_element_start(tl->items[i].type);
+}
+
+static bool parse_event_trigger(Parser *parser) {
+    advance_tok(parser); /* when */
+    advance_tok(parser); /* event source name */
+    while (match_tok(parser, TOKEN_DOT))
+        advance_tok(parser); /* member name */
+    return true;
+}
+
+/* HELIX-22: for <var> [:] <Type> */
+static bool parse_for_decl(Parser *parser) {
+    if (!consume_tok(parser, TOKEN_KW_FOR, "Expected 'for'"))
+        return false;
+    if (!consume_tok(parser, TOKEN_IDENTIFIER, "Expected variable name after 'for'"))
+        return false;
+    match_tok(parser, TOKEN_COLON); /* Optional colon */
+    return consume_tok(parser, TOKEN_IDENTIFIER, "Expected type name after 'for <name> :'");
 }
 
 static bool impl_parse_rule_element(Parser *parser) {
@@ -1389,7 +1451,11 @@ static bool impl_parse_rule_element(Parser *parser) {
         case TOKEN_KW_SOURCE:      return parse_source_decl(parser);
         case TOKEN_KW_BIND:        return parse_bind_decl(parser);
         case TOKEN_KW_LET:         return parse_let_decl(parser);
-        case TOKEN_KW_WHEN:        return parse_when_stmt(parser);
+        case TOKEN_KW_WHEN:
+            if (is_event_trigger_ahead(parser))
+                return parse_event_trigger(parser);
+            return parse_when_stmt(parser);
+        case TOKEN_KW_FOR:         return parse_for_decl(parser);
         case TOKEN_KW_ALERT:
         case TOKEN_KW_SUPPRESS:    return parse_action_stmt(parser);
         case TOKEN_KW_LATEST:      return parse_latest_query(parser);

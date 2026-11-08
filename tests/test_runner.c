@@ -1108,6 +1108,63 @@ static bool test_helix38_edge_cases(void) {
     return true;
 }
 
+/* --- HELIX-22: event trigger, for, alert level, terminology mappings, bind site block --- */
+static bool test_helix22_event_trigger(void) {
+    return test_string_validation("rule R: when Observation.created end rule", true) &&
+           test_string_validation("rule R:\n    when Observation.created\n    for patient : P\nend rule\n", true);
+}
+
+static bool test_helix22_for_decl(void) {
+    return test_string_validation("rule R: for patient : P end rule", true) &&
+           test_string_validation("rule R: for patient P end rule", true);
+}
+
+static bool test_helix22_alert_level(void) {
+    return test_string_validation("rule R: alert level : interruptive end rule", true) &&
+           test_string_validation("rule R: when x > 1 then alert level : \"critical\" end when end rule", true);
+}
+
+static bool test_helix22_terminology_mappings(void) {
+    return test_string_validation(
+               "rule R: terminology potassium -> LOINC[\"serum potassium\"] glucose -> LOINC[\"glucose\"] end rule", true) &&
+           test_string_validation("rule R: terminology LOINC end rule", true);
+}
+
+static bool test_helix22_bind_site_block(void) {
+    return test_string_validation(
+        "rule R: bind site \"Hospital_A\" source : FHIR_R4 terminology potassium -> LOINC[\"serum potassium\"] end bind end rule", true);
+}
+
+static bool test_helix22_full_example(void) {
+    /* suppress repeat_of is covered by HELIX-16; here it is a plain suppress */
+    return test_string_validation(
+        "# Alert when a critical potassium result is recorded\n"
+        "rule Hyperkalemia_Alert\n"
+        "  intent \"Detect a critical laboratory result\"\n"
+        "  bind site \"Hospital_A\"\n"
+        "    source : FHIR_R4\n"
+        "    terminology\n"
+        "      potassium -> LOINC[\"serum potassium\"]\n"
+        "  end bind\n"
+        "  schedule : event_driven\n"
+        "  when Observation.created\n"
+        "  for patient : P\n"
+        "  let lab := latest Observation where code = potassium within 24 hours before now\n"
+        "  when lab.value > 6.0\n"
+        "  then alert level : interruptive\n"
+        "       suppress \"Hyperkalemia_Alert\"\n"
+        "  end when\n"
+        "end rule\n", true);
+}
+
+static bool test_helix22_negatives(void) {
+    return test_string_validation("rule R: when x end rule", false) &&
+           test_string_validation("rule R: for patient : end rule", false) &&
+           test_string_validation("rule R: alert level : end rule", false) &&
+           test_string_validation("rule R: terminology potassium -> end rule", false) &&
+           test_string_validation("rule R: bind site end bind end rule", false);
+}
+
 /* --- HELIX-36 Unit Tests: bind site configuration blocks --- */
 
 static bool test_helix36_valid_bind_site(void) {
@@ -1343,6 +1400,15 @@ int main(void) {
     run_test("HELIX-17: Neg - Incomplete Query", test_helix17_neg_incomplete_query);
     run_test("HELIX-17: Neg - Trailing Tokens", test_helix17_neg_trailing_tokens);
 
+    
+    /* HELIX-22 Unit Tests */
+    run_test("HELIX-22: when Event.name trigger", test_helix22_event_trigger);
+    run_test("HELIX-22: for patient : P", test_helix22_for_decl);
+    run_test("HELIX-22: alert level : X", test_helix22_alert_level);
+    run_test("HELIX-22: terminology mappings", test_helix22_terminology_mappings);
+    run_test("HELIX-22: bind site block", test_helix22_bind_site_block);
+    run_test("HELIX-22: full proposal example", test_helix22_full_example);
+    run_test("HELIX-22: Neg - malformed forms", test_helix22_negatives);
     /* HELIX-36: bind site configuration blocks */
     run_test("HELIX-36: Valid bind site", test_helix36_valid_bind_site);
     run_test("HELIX-36: bind site with source & terminology", test_helix36_valid_source_and_terminology);

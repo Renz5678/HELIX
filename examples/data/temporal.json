@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "evaluationTime": "2026-10-31T12:00:00Z",
+  "Bindings": {
+    "Vitals.heart_rate": {
+      "table": "heart_rate_readings",
+      "column": "value"
+    }
+  },
+  "tables": [
+    {
+      "name": "heart_rate_readings",
+      "patientIdColumn": "patient_id",
+      "timestampColumn": "timestamp",
+      "defaultValueColumn": "value",
+      "columns": [
+        {
+          "name": "patient_id",
+          "type": "String"
+        },
+        {
+          "name": "timestamp",
+          "type": "DateTime"
+        },
+        {
+          "name": "value",
+          "type": "Float"
+        },
+        {
+          "name": "status",
+          "type": "String"
+        }
+      ],
+      "rows": [
+        {
+          "patient_id": "P001",
+          "value": 100,
+          "status": "final",
+          "timestamp": "2026-10-31T11:50:00Z"
+        },
+        {
+          "patient_id": "P002",
+          "value": 135,
+          "status": "final",
+          "timestamp": "2026-10-31T11:55:00Z"
+        },
+        {
+          "patient_id": "P002",
+          "value": 90,
+          "status": "preliminary",
+          "timestamp": "2026-10-31T11:59:00Z"
+        }
+      ]
+    }
+  ]
+}

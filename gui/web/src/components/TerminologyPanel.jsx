@@ -21,7 +21,7 @@ export default function TerminologyPanel({ onInsert, usedCodes }) {
       />
       <div className="flex-1 overflow-y-auto">
         {results.map((c) => {
-          const used = usedCodes.has(c.code);
+          const used = usedCodes.has(c.code) || (c.aliases || []).some((a) => usedCodes.has(a.toLowerCase()) || usedCodes.has(a));
           return (
             <div
               key={c.system + c.code}

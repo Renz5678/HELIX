@@ -1,0 +1,25 @@
+:root {
+  --bg-primary: #071116;
+  --bg-secondary: #0b1d24;
+  --bg-editor: #0d171d;
+  --bg-elevated: #122a31;
+  --accent-primary: #00c9a7;
+  --accent-secondary: #00d9e8;
+  --accent-hover: #35e8d0;
+  --text-primary: #f2f8f9;
+  --text-secondary: #8ca5ae;
+  --border-subtle: #244049;
+  --status-error: #f87171;
+  --status-warning: #fbbf24;
+  --status-success: #34d399;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  font-synthesis: none;
+  color-scheme: dark;
+}

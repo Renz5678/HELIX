@@ -1,0 +1,4 @@
+# Invalid: Incomplete latest observation query (HELIX-17)
+rule IncompleteLatestQuery:
+    latest Observation
+end rule

@@ -14,8 +14,8 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_KW_INTENT` | `intent` | Clinical objective / rationale | `intent: "Detect acute hyperglycemia"` |
 | `TOKEN_KW_BIND` | `bind` | Data source binding | `bind glucose_data = Labs.glucose` |
 | `TOKEN_KW_SITE` | `site` | Clinical care setting / department | `site: ICU` |
-| `TOKEN_KW_SOURCE` | `source` | External system or feed | `source: EHR -> FHIR_R4` |
-| `TOKEN_KW_TERMINOLOGY` | `terminology` | Code systems (SNOMED, LOINC) | `terminology: LOINC("2339-0")` |
+| `TOKEN_KW_SOURCE` | `source` | External system or feed | `source : FHIR_R4`, `source: EHR -> FHIR_R4` |
+| `TOKEN_KW_TERMINOLOGY` | `terminology` | Concept-to-terminology mappings or code systems | `terminology potassium -> LOINC["serum potassium"]`, `terminology: LOINC("2339-0")` |
 | `TOKEN_KW_SCHEDULE` | `schedule` | Evaluation cadence / trigger | `schedule: "every 15m"` |
 | `TOKEN_KW_WHEN` | `when` | Condition evaluation trigger | `when glucose_data.latest > 180` |
 | `TOKEN_KW_FOR` | `for` | Subject binding in condition | `when for patient glucose_data.latest > 180` |
@@ -30,7 +30,7 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_KW_ALERT` | `alert` | Alert action statement | `alert: "Severe Hyperglycemia", "CRITICAL"` |
 | `TOKEN_KW_SUPPRESS` | `suppress` | Alert suppression statement | `suppress: within 6 hours` |
 | `TOKEN_KW_OTHERWISE`| `otherwise` | Alternative branch in `when` | `otherwise let status := "normal"` |
-| `TOKEN_KW_END` | `end` | Rule block terminator | `end` |
+| `TOKEN_KW_END` | `end` | Block terminator keyword | `end rule`, `end bind`, `end when` |
 
 ---
 
@@ -66,7 +66,11 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_GTE` | `>=` | Greater-than-or-equal comparison | Comparison level |
 | `TOKEN_LT` | `<` | Less-than comparison | Comparison level |
 | `TOKEN_LTE` | `<=` | Less-than-or-equal comparison | Comparison level |
-| `TOKEN_ARROW` | `->` | Directional source mapping operator | Postfix / declaration |
+| `TOKEN_ARROW` | `->` | Directional source / terminology concept mapping operator | Postfix / declaration |
+| `TOKEN_PLUS` | `+` | Addition arithmetic operator | Additive level |
+| `TOKEN_MINUS` | `-` | Subtraction / unary negation arithmetic operator | Additive / unary level |
+| `TOKEN_STAR` | `*` | Multiplication arithmetic operator | Multiplicative level |
+| `TOKEN_SLASH` | `/` | Division arithmetic operator | Multiplicative level |
 
 ---
 
@@ -79,8 +83,8 @@ Reserved words are case-sensitive and must be written in lowercase.
 | `TOKEN_COMMA` | `,` | Argument and element separator |
 | `TOKEN_LPAREN` | `(` | Left grouping parenthesis |
 | `TOKEN_RPAREN` | `)` | Right grouping parenthesis |
-| `TOKEN_LBRACKET`| `[` | Left index / filter bracket |
-| `TOKEN_RBRACKET`| `]` | Right index / filter bracket |
+| `TOKEN_LBRACKET`| `[` | Left index, filter, or terminology reference bracket |
+| `TOKEN_RBRACKET`| `]` | Right index, filter, or terminology reference bracket |
 
 ---
 

@@ -50,19 +50,26 @@ bool source_load(const char *path, SourceBuffer *out) {
     return true;
 }
 
-bool source_from_string(const char *name, const char *str, SourceBuffer *out) {
-    if (!str || !out) return false;
+bool source_from_memory(const char *name, const char *data, size_t len, SourceBuffer *out) {
+    if (!data || !out) return false;
     out->filename = duplicate_string(name ? name : "<string>");
-    size_t len = strlen(str);
+    if (!out->filename) { out->content = NULL; out->length = 0; return false; }
     out->content = (char *)malloc(len + 1);
     if (!out->content) {
         free(out->filename);
         out->filename = NULL;
+        out->length = 0;
         return false;
     }
-    memcpy(out->content, str, len + 1);
+    memcpy(out->content, data, len);
+    out->content[len] = '\0';
     out->length = len;
     return true;
+}
+
+bool source_from_string(const char *name, const char *str, SourceBuffer *out) {
+    if (!str || !out) return false;
+    return source_from_memory(name, str, strlen(str), out);
 }
 
 bool source_get_line(const SourceBuffer *src, size_t line_num, const char **line_start, size_t *line_len) {
@@ -70,12 +77,13 @@ bool source_get_line(const SourceBuffer *src, size_t line_num, const char **line
 
     size_t cur_line = 1;
     const char *p = src->content;
+    const char *end = src->content + src->length;
     const char *start = p;
 
-    while (*p != '\0') {
+    while (p < end) {
         if (cur_line == line_num) {
             start = p;
-            while (*p != '\0' && *p != '\n' && *p != '\r') {
+            while (p < end && *p != '\n' && *p != '\r') {
                 p++;
             }
             *line_start = start;
@@ -86,7 +94,7 @@ bool source_get_line(const SourceBuffer *src, size_t line_num, const char **line
         if (*p == '\n') {
             cur_line++;
         } else if (*p == '\r') {
-            if (*(p + 1) == '\n') {
+            if (p + 1 < end && *(p + 1) == '\n') {
                 p++;
             }
             cur_line++;
@@ -95,8 +103,8 @@ bool source_get_line(const SourceBuffer *src, size_t line_num, const char **line
     }
 
     if (cur_line == line_num && p >= start) {
-        *line_start = start;
-        *line_len = (size_t)(p - start);
+        *line_start = p;
+        *line_len = 0;
         return true;
     }
 

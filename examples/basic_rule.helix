@@ -6,6 +6,7 @@ rule HighGlucoseAlert:
     source: EHR -> FHIR_R4
 
     bind glucose_data = Labs.glucose
+    end bind
 
     let threshold := 180
     let severe_threshold = 250
@@ -15,4 +16,5 @@ rule HighGlucoseAlert:
         alert: "High Blood Glucose Detected", "WARNING"
     otherwise:
         suppress: within 4 hours
-end
+    end when
+end rule

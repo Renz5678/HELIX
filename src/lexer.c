@@ -13,9 +13,13 @@ void lexer_init(Lexer *lexer, const SourceBuffer *source, DiagnosticEngine *diag
     lexer->column = 1;
 }
 
+static bool is_at_end(const Lexer *lexer) {
+    if (!lexer || !lexer->source || !lexer->source->content) return true;
+    return lexer->cursor >= lexer->source->length;
+}
+
 static char peek_char(const Lexer *lexer) {
-    if (!lexer->source || !lexer->source->content) return '\0';
-    if (lexer->cursor >= lexer->source->length) return '\0';
+    if (is_at_end(lexer)) return '\0';
     return lexer->source->content[lexer->cursor];
 }
 
@@ -26,11 +30,11 @@ static char peek_next(const Lexer *lexer) {
 }
 
 static char advance_char(Lexer *lexer) {
+    if (is_at_end(lexer)) return '\0';
     char c = peek_char(lexer);
-    if (c == '\0') return '\0';
 
     lexer->cursor++;
-    if (c == '\n') {
+    if (c == '\n' || (c == '\r' && peek_char(lexer) != '\n')) {
         lexer->line++;
         lexer->column = 1;
     } else {
@@ -40,13 +44,13 @@ static char advance_char(Lexer *lexer) {
 }
 
 static void skip_whitespace_and_comments(Lexer *lexer) {
-    while (true) {
+    while (!is_at_end(lexer)) {
         char c = peek_char(lexer);
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
             advance_char(lexer);
         } else if (c == '#') {
-            /* Comment: skip until newline or EOF */
-            while (peek_char(lexer) != '\0' && peek_char(lexer) != '\n') {
+            /* Comment: skip until newline, embedded NUL, or EOF */
+            while (!is_at_end(lexer) && peek_char(lexer) != '\0' && peek_char(lexer) != '\n') {
                 advance_char(lexer);
             }
         } else {
@@ -161,22 +165,44 @@ static Token scan_number(Lexer *lexer) {
     return tok;
 }
 
+/* Agreed escapes: \n \t \r \\ \"  (adjust to the spec) */
+static bool is_valid_escape(char c) {
+    switch (c) {
+        case 'n': case 't': case 'r': case '\\': case '"':
+            return true;
+        default:
+            return false;
+    }
+}
+
 static Token scan_string(Lexer *lexer) {
     size_t start_col = lexer->column;
     size_t start_line = lexer->line;
     size_t start_pos = lexer->cursor;
+    bool had_error = false;
 
     advance_char(lexer); /* Consume opening quote '"' */
 
     while (true) {
-        char c = peek_char(lexer);
-        if (c == '\0' || c == '\n') {
+        if (is_at_end(lexer) || peek_char(lexer) == '\n' || peek_char(lexer) == '\r') {
             /* Unterminated string literal */
             if (lexer->diag) {
                 diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
                             "Unterminated string literal");
             }
+            /* Line break is left unconsumed so line/column tracking stays correct */
             return token_create(TOKEN_ERROR, "Unterminated string", start_line, start_col);
+        }
+
+        char c = peek_char(lexer);
+        if (c == '\0') {
+            if (lexer->diag) {
+                diag_report(lexer->diag, DIAG_LEXICAL_ERROR, lexer->line, lexer->column,
+                            "Unrecognized character '\\x00' (0x00)");
+            }
+            had_error = true;
+            advance_char(lexer);
+            continue;
         }
 
         if (c == '"') {
@@ -185,14 +211,28 @@ static Token scan_string(Lexer *lexer) {
         }
 
         if (c == '\\') {
+            size_t esc_line = lexer->line;
+            size_t esc_col = lexer->column;
             advance_char(lexer); /* Consume backslash */
+
             char esc = peek_char(lexer);
-            if (esc != '\0') {
-                advance_char(lexer);
+            if (esc == '\0' || esc == '\n' || esc == '\r') {
+                /* Backslash before a line break/EOF is NOT a continuation.
+                   Don't consume it; the next iteration reports the unterminated string. */
+                continue;
             }
-        } else {
-            advance_char(lexer);
+            if (!is_valid_escape(esc)) {
+                if (lexer->diag) {
+                    diag_report(lexer->diag, DIAG_LEXICAL_ERROR, esc_line, esc_col,
+                                "Invalid escape sequence '\\%c'", esc);
+                }
+                had_error = true; /* keep scanning to the closing quote to avoid cascading errors */
+            }
+            advance_char(lexer); /* Consume the escaped character */
+            continue;
         }
+
+        advance_char(lexer);
     }
 
     size_t len = lexer->cursor - start_pos;
@@ -200,24 +240,28 @@ static Token scan_string(Lexer *lexer) {
     if (!buf) {
         return token_create(TOKEN_ERROR, "Out of memory", start_line, start_col);
     }
-    memcpy(buf, &lexer->source->content[start_pos], len);
+    for (size_t i = 0; i < len; i++) {
+        char ch = lexer->source->content[start_pos + i];
+        buf[i] = ch ? ch : ' ';
+    }
     buf[len] = '\0';
 
-    Token tok = token_create(TOKEN_STRING_LIT, buf, start_line, start_col);
+    Token tok = token_create(had_error ? TOKEN_ERROR : TOKEN_STRING_LIT, buf, start_line, start_col);
     free(buf);
     return tok;
 }
 
-Token lexer_next_token(Lexer *lexer) {
+static Token lexer_next_raw(Lexer *lexer) {
     skip_whitespace_and_comments(lexer);
 
     size_t start_col = lexer->column;
     size_t start_line = lexer->line;
-    char c = peek_char(lexer);
 
-    if (c == '\0') {
+    if (is_at_end(lexer)) {
         return token_create(TOKEN_EOF, "", start_line, start_col);
     }
+
+    char c = peek_char(lexer);
 
     /* Identifiers and reserved words */
     if (isalpha((unsigned char)c) || c == '_') {
@@ -277,17 +321,21 @@ Token lexer_next_token(Lexer *lexer) {
             }
             return token_create(TOKEN_GT, ">", start_line, start_col);
 
+        case '+':
+            return token_create(TOKEN_PLUS, "+", start_line, start_col);
+
         case '-':
             if (peek_char(lexer) == '>') {
                 advance_char(lexer);
                 return token_create(TOKEN_ARROW, "->", start_line, start_col);
             }
-            /* Lone '-' without digits */
-            if (lexer->diag) {
-                diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
-                            "Unsupported lone character '-' (did you mean '->'?)");
-            }
-            return token_create(TOKEN_ERROR, "-", start_line, start_col);
+            return token_create(TOKEN_MINUS, "-", start_line, start_col);
+
+        case '*':
+            return token_create(TOKEN_STAR, "*", start_line, start_col);
+
+        case '/':
+            return token_create(TOKEN_SLASH, "/", start_line, start_col);
 
         case '.':
             return token_create(TOKEN_DOT, ".", start_line, start_col);
@@ -308,14 +356,36 @@ Token lexer_next_token(Lexer *lexer) {
             return token_create(TOKEN_RBRACKET, "]", start_line, start_col);
 
         default: {
-            char lexeme[2] = {c, '\0'};
+            char lexeme[8] = {c, '\0'};
+            unsigned char lead=(unsigned char)c;
+            if(lead>=0xC2&&lead<=0xF4){
+                size_t width=lead<0xE0?2:lead<0xF0?3:4;
+                size_t i=1;while(i<width&&((unsigned char)peek_char(lexer)&0xC0)==0x80)lexeme[i++]=advance_char(lexer);
+                lexeme[i]=0;
+                if(i!=width)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
+            }else if(lead>=128||lead==0)snprintf(lexeme,sizeof lexeme,"\\x%02X",lead);
             if (lexer->diag) {
                 diag_report(lexer->diag, DIAG_LEXICAL_ERROR, start_line, start_col,
-                            "Unrecognized character '%c' (0x%02X)", c, (unsigned char)c);
+                            "Unrecognized character '%s' (0x%02X)", lexeme, (unsigned char)c);
             }
             return token_create(TOKEN_ERROR, lexeme, start_line, start_col);
         }
     }
+}
+
+Token lexer_next_token(Lexer *lexer) {
+    skip_whitespace_and_comments(lexer);
+    size_t start = lexer->cursor;
+    Token t = lexer_next_raw(lexer);
+    t.start_offset = start; t.end_offset = lexer->cursor;
+    if (lexer->diag && t.type == TOKEN_ERROR && lexer->diag->count) {
+        DiagnosticItem *d = &lexer->diag->items[lexer->diag->count-1];
+        if (d->line == t.line && d->column == t.column) {
+            d->start_offset = start; d->end_offset = lexer->cursor;
+            d->end_line = lexer->line; d->end_column = lexer->column;
+        }
+    }
+    return t;
 }
 
 bool lexer_tokenize_all(Lexer *lexer, TokenList *out_tokens) {
@@ -328,7 +398,11 @@ bool lexer_tokenize_all(Lexer *lexer, TokenList *out_tokens) {
         if (tok.type == TOKEN_ERROR) {
             success = false;
         }
-        token_list_append(out_tokens, tok);
+        if (!tok.lexeme || !token_list_append(out_tokens, tok)) {
+            token_free(&tok);
+            if (lexer->diag) lexer->diag->allocation_failed = true;
+            return false;
+        }
         if (tok.type == TOKEN_EOF) {
             break;
         }

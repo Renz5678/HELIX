@@ -1491,7 +1491,7 @@ function markerCodeString(code: MarkerInput["code"]): string {
 function isWholeWordSpan(source: string, startOffset: number, endOffset: number): boolean {
   const before = startOffset > 0 ? source[startOffset - 1] : "";
   const after = endOffset < source.length ? source[endOffset] : "";
-  return !/[A-Za-z0-9_.]/.test(before) && !/[A-Za-z0-9_]/.test(after);
+  return !/[A-Za-z0-9_.]/.test(before) && !/[A-Za-z0-9_.]/.test(after);
 }
 
 function extractTargetPathFromSpan(
@@ -1903,14 +1903,13 @@ export function computeQuickFixes(
       targetRange = tokenRange(tokAtSpan.token);
       targetStart = tokAtSpan.token.startOffset;
       targetEnd = tokAtSpan.token.endOffset;
-    } else if (
-      !IDENTIFIER_RE.test(targetText) ||
-      !isWholeWordSpan(doc.source, targetStart, targetEnd)
-    ) {
-      continue;
     }
 
-    if (!IDENTIFIER_RE.test(targetText) || HELIX_KEYWORD_SET.has(targetText)) {
+    if (
+      !IDENTIFIER_RE.test(targetText) ||
+      HELIX_KEYWORD_SET.has(targetText) ||
+      !isWholeWordSpan(doc.source, targetStart, targetEnd)
+    ) {
       continue;
     }
 

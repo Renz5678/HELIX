@@ -569,5 +569,74 @@ describe("IDE providers (hover, signature, nav, outline, quick fixes)", () => {
       ],
     );
     expect(fixShifted).toEqual([]);
+
+    // Stale UNKNOWN_IDENTIFIER marker on series prefix followed by `.` must not emit `.latest`
+    const dottedSeries =
+      'rule R:\n    source Vitals\n    when Vitals.heart_rate > 100:\n    then:\n        alert: "x"\n    end when\nend rule';
+    const fixStaleDottedSeries = engine.provideQuickFixes(
+      "file:///q11.helix",
+      2,
+      dottedSeries,
+      sepsisDs,
+      [
+        {
+          code: "UNKNOWN_IDENTIFIER",
+          message: "Unknown identifier or series used without .latest",
+          range: {
+            startLineNumber: 3,
+            startColumn: 10,
+            endLineNumber: 3,
+            endColumn: 16,
+          },
+        },
+      ],
+    );
+    expect(fixStaleDottedSeries).toEqual([]);
+
+    // Positive BINDING_NOT_FOUND typo fix still succeeds when full dotted path matches
+    const bindingTypo = "rule R:\n    bind x = Vitals.systolc_bp\nend rule";
+    const fixBindingTypo = engine.provideQuickFixes(
+      "file:///q11b.helix",
+      1,
+      bindingTypo,
+      sepsisDs,
+      [
+        {
+          code: "BINDING_NOT_FOUND",
+          message: "Binding must resolve to a declared table and column",
+          range: {
+            startLineNumber: 2,
+            startColumn: 14,
+            endLineNumber: 2,
+            endColumn: 31,
+          },
+        },
+      ],
+    );
+    expect(fixBindingTypo.some((f) => f.edit.text === "Vitals.systolic_bp")).toBe(
+      true,
+    );
+
+    // Stale BINDING_NOT_FOUND marker on prefix of extended dotted path must not emit prefix-only replacement
+    const extendedBinding = "rule R:\n    bind x = Vitals.systolc_bp.extra\nend rule";
+    const fixStaleExtendedBinding = engine.provideQuickFixes(
+      "file:///q12.helix",
+      2,
+      extendedBinding,
+      sepsisDs,
+      [
+        {
+          code: "BINDING_NOT_FOUND",
+          message: "Binding must resolve to a declared table and column",
+          range: {
+            startLineNumber: 2,
+            startColumn: 14,
+            endLineNumber: 2,
+            endColumn: 31,
+          },
+        },
+      ],
+    );
+    expect(fixStaleExtendedBinding).toEqual([]);
   });
 });

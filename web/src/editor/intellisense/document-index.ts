@@ -46,6 +46,7 @@ const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
 interface ActiveBlockMeta {
   blockIndex: number;
   varScope: Map<string, number>;
+  branchVarScope: Map<string, number>;
   ruleScopedSymbols: number[];
   thenScopedSymbols: number[];
   otherwiseScopedSymbols: number[];
@@ -605,7 +606,10 @@ class DocumentIndexer {
 
   private lookupVisibleVar = (name: string): number | null => {
     for (let k = this.blockStack.length - 1; k >= 0; k--) {
-      const hit = this.blockStack[k].varScope.get(name);
+      const meta = this.blockStack[k];
+      const branchHit = meta.branchVarScope.get(name);
+      if (branchHit !== undefined) return branchHit;
+      const hit = meta.varScope.get(name);
       if (hit !== undefined) return hit;
     }
     return null;
@@ -652,13 +656,13 @@ class DocumentIndexer {
       } else {
         const ruleMeta = this.findEnclosingRuleMeta();
         const top = this.currentBlockMeta();
-        if (
-          top &&
-          this.blocks[top.blockIndex].kind === "when" &&
-          (this.blocks[top.blockIndex].thenOffset !== null ||
-            this.blocks[top.blockIndex].otherwiseOffset !== null)
-        ) {
-          top.varScope.set(fullEntry.name, index);
+        if (top && this.blocks[top.blockIndex].kind === "when") {
+          const whenBlock = this.blocks[top.blockIndex];
+          if (whenBlock.thenOffset !== null || whenBlock.otherwiseOffset !== null) {
+            top.branchVarScope.set(fullEntry.name, index);
+          } else {
+            top.varScope.set(fullEntry.name, index);
+          }
         } else if (ruleMeta) {
           ruleMeta.varScope.set(fullEntry.name, index);
         } else if (top) {
@@ -736,6 +740,7 @@ class DocumentIndexer {
     const meta: ActiveBlockMeta = {
       blockIndex,
       varScope: new Map(),
+      branchVarScope: new Map(),
       ruleScopedSymbols: [],
       thenScopedSymbols: [],
       otherwiseScopedSymbols: [],
@@ -1177,6 +1182,36 @@ class DocumentIndexer {
       }
     }
 
+    const whenMeta = this.pushBlockMeta({
+      kind: "when",
+      openOffset: tok.startOffset,
+      closeOffset: null,
+      headerRange: spanRange(tok, forVarTok ?? tok),
+      fullRange: spanRange(tok, this.eofTok),
+      thenOffset: null,
+      otherwiseOffset: null,
+      parentIndex,
+    });
+
+    if (forVarTok) {
+      const forSym = this.pushSymbol(
+        {
+          kind: "for",
+          name: forVarTok.lexeme,
+          nameRange: tokenRange(forVarTok),
+          declarationRange: spanRange(tok, forVarTok),
+          scopeStartOffset: tok.startOffset,
+          scopeEndOffset: this.source.length,
+          valueType: "Unknown",
+          syntaxOnly: true,
+        },
+        forVarTok.endOffset,
+        whenMeta.otherwiseScopedSymbols,
+        true,
+      );
+      if (forDeclRefIdx !== -1) this.references[forDeclRefIdx].symbolIndex = forSym.index;
+    }
+
     let colonTok: LexToken | undefined;
     const condTokens = this.collectExprTokens((cur, _collected, depth) => {
       if (depth !== 0) return false;
@@ -1201,7 +1236,9 @@ class DocumentIndexer {
 
     const headerEndTok =
       colonTok ?? condTokens[condTokens.length - 1] ?? forVarTok ?? tok;
-    const conditionPreview =
+    const whenBlock = this.blocks[whenMeta.blockIndex];
+    whenBlock.headerRange = spanRange(tok, headerEndTok);
+    whenBlock.conditionPreview =
       condTokens.length > 0
         ? sliceCollapsed(
             this.source,
@@ -1209,37 +1246,6 @@ class DocumentIndexer {
             condTokens[condTokens.length - 1].endOffset,
           )
         : undefined;
-
-    const whenMeta = this.pushBlockMeta({
-      kind: "when",
-      openOffset: tok.startOffset,
-      closeOffset: null,
-      headerRange: spanRange(tok, headerEndTok),
-      fullRange: spanRange(tok, this.eofTok),
-      thenOffset: null,
-      otherwiseOffset: null,
-      parentIndex,
-      conditionPreview,
-    });
-
-    if (forVarTok) {
-      const forSym = this.pushSymbol(
-        {
-          kind: "for",
-          name: forVarTok.lexeme,
-          nameRange: tokenRange(forVarTok),
-          declarationRange: spanRange(tok, forVarTok),
-          scopeStartOffset: tok.startOffset,
-          scopeEndOffset: this.source.length,
-          valueType: "Unknown",
-          syntaxOnly: true,
-        },
-        forVarTok.endOffset,
-        whenMeta.otherwiseScopedSymbols,
-        true,
-      );
-      if (forDeclRefIdx !== -1) this.references[forDeclRefIdx].symbolIndex = forSym.index;
-    }
   }
 
   private handleThen(tok: LexToken, prevTok: LexToken | undefined): void {
@@ -1279,7 +1285,7 @@ class DocumentIndexer {
       const whenMeta = this.blockStack[targetPos];
       const whenBlock = this.blocks[whenMeta.blockIndex];
       this.finalizeSymbols(whenMeta.thenScopedSymbols, tok.startOffset, false);
-      whenMeta.varScope.clear();
+      whenMeta.branchVarScope.clear();
       whenBlock.otherwiseOffset = tok.startOffset;
     }
     this.i++;

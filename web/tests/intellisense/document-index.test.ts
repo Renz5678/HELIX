@@ -449,4 +449,39 @@ describe("error-tolerant document index", () => {
     ]);
     expect(openBlocksAt(multiDoc, multiRules.length)).toEqual([]);
   });
+
+  it("scopes when for loop variable to condition, then, and otherwise without leaking after end when", () => {
+    const schema = getDatasetSchemaIndex(structuredClone(temporalData) as Dataset);
+    const src = [
+      "rule WhenForScope:",
+      "    when for p p.latest > 10:",
+      "    then:",
+      '        alert: "x", p',
+      "    otherwise:",
+      '        alert: "y", p',
+      "    end when",
+      "    let after := p",
+      "end rule",
+    ].join("\n");
+    const doc = indexDocument(src, schema);
+
+    const forSym = doc.symbols.find((s) => s.kind === "for" && s.name === "p");
+    expect(forSym).toBeDefined();
+    expect(forSym?.syntaxOnly).toBe(true);
+
+    const condUseOffset = src.indexOf("p.latest");
+    const thenUseOffset = src.indexOf(", p") + 2;
+    const otherwiseUseOffset = src.indexOf(", p", thenUseOffset) + 2;
+    const afterEndWhenOffset = src.lastIndexOf("p");
+
+    expect(findReferenceAtOffset(doc, condUseOffset)?.symbolIndex).toBe(forSym?.index);
+    expect(findReferenceAtOffset(doc, thenUseOffset)?.symbolIndex).toBe(forSym?.index);
+    expect(findReferenceAtOffset(doc, otherwiseUseOffset)?.symbolIndex).toBe(forSym?.index);
+    expect(findReferenceAtOffset(doc, afterEndWhenOffset)?.symbolIndex).toBeNull();
+
+    expect(visibleSymbolsAt(doc, condUseOffset).map((s) => s.name)).toContain("p");
+    expect(visibleSymbolsAt(doc, thenUseOffset).map((s) => s.name)).toContain("p");
+    expect(visibleSymbolsAt(doc, otherwiseUseOffset).map((s) => s.name)).toContain("p");
+    expect(visibleSymbolsAt(doc, afterEndWhenOffset).map((s) => s.name)).not.toContain("p");
+  });
 });

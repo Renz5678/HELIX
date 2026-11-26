@@ -205,7 +205,7 @@ function isOperator(tok: LexToken | undefined, lexeme: string): boolean {
   return tok !== undefined && tok.kind === "operator" && tok.lexeme === lexeme;
 }
 
-function isMemberNameToken(tok: LexToken | undefined): boolean {
+function isMemberNameToken(tok: LexToken | undefined): tok is LexToken {
   if (!tok) return false;
   return (
     tok.kind === "identifier" ||
@@ -779,6 +779,14 @@ function inferComparisonLhs(
   return { expectedType: "Unknown", lhsHintName: firstIdent };
 }
 
+function isIncompleteFloatTail(tokens: readonly LexToken[]): boolean {
+  return (
+    tokens.length >= 2 &&
+    tokens[tokens.length - 2].kind === "int" &&
+    isDelimiter(tokens[tokens.length - 1], ".")
+  );
+}
+
 function detectComparisonRhs(
   exprTokens: readonly LexToken[],
   doc: DocumentIndex,
@@ -788,6 +796,8 @@ function detectComparisonRhs(
   if (exprTokens.length === 0) return null;
 
   // Walk backwards at current paren level to find the start of this boolean/group clause.
+  // Do not break on unmatched '(' / '[' so expressions like `x < (|` or `x < (10 + |`
+  // still retain the enclosing comparison operator on the LHS.
   let depth = 0;
   let clauseStart = 0;
   for (let i = exprTokens.length - 1; i >= 0; i--) {
@@ -795,12 +805,7 @@ function detectComparisonRhs(
     if (isDelimiter(t, ")") || isDelimiter(t, "]")) {
       depth++;
     } else if (isDelimiter(t, "(") || isDelimiter(t, "[")) {
-      if (depth > 0) {
-        depth--;
-      } else {
-        clauseStart = i + 1;
-        break;
-      }
+      if (depth > 0) depth--;
     } else if (
       depth === 0 &&
       (isKeyword(t, "and") ||
@@ -814,7 +819,25 @@ function detectComparisonRhs(
     }
   }
 
-  const clause = exprTokens.slice(clauseStart);
+  const rawClause = exprTokens.slice(clauseStart);
+  if (rawClause.length === 0) return null;
+
+  // Strip leading unmatched '(' / '[' (e.g. `when (sbp.latest < |` or `when (sbp.latest < (10 + |`)
+  const openStack: number[] = [];
+  for (let i = 0; i < rawClause.length; i++) {
+    const t = rawClause[i];
+    if (isDelimiter(t, "(") || isDelimiter(t, "[")) {
+      openStack.push(i);
+    } else if (isDelimiter(t, ")") || isDelimiter(t, "]")) {
+      if (openStack.length > 0) openStack.pop();
+    }
+  }
+  const unmatchedOpens = new Set(openStack);
+  let trimStart = 0;
+  while (trimStart < rawClause.length && unmatchedOpens.has(trimStart)) {
+    trimStart++;
+  }
+  const clause = rawClause.slice(trimStart);
   if (clause.length === 0) return null;
 
   let cmpIdx = -1;
@@ -838,7 +861,8 @@ function detectComparisonRhs(
   const tail = afterCmp[afterCmp.length - 1];
   if (
     (tail.kind === "operator" && ARITHMETIC_OPERATORS.has(tail.lexeme)) ||
-    isDelimiter(tail, "(")
+    isDelimiter(tail, "(") ||
+    isIncompleteFloatTail(afterCmp)
   ) {
     return inferComparisonLhs(clause.slice(0, cmpIdx), doc, schema, offset);
   }
@@ -856,7 +880,6 @@ function findActiveWhereClause(
     if (isDelimiter(t, ")") || isDelimiter(t, "]")) depth++;
     else if (isDelimiter(t, "(") || isDelimiter(t, "[")) {
       if (depth > 0) depth--;
-      else break;
     } else if (depth === 0) {
       if (isKeyword(t, "within") || isDelimiter(t, ":")) {
         return null;
@@ -885,6 +908,23 @@ function findActiveWhereClause(
   };
 }
 
+function buildWhereValueResult(
+  colTok: LexToken | undefined,
+  tableName: string | undefined,
+  schema: DatasetSchemaIndex,
+): { kind: "where-value"; columnName?: string; expectedType?: ValueType } {
+  const colName = isMemberNameToken(colTok) ? colTok.lexeme : undefined;
+  const table = tableName ? schema.tablesByName.get(tableName) : undefined;
+  const col = colName
+    ? table?.columns?.find((c) => c.name === colName)
+    : undefined;
+  return {
+    kind: "where-value",
+    columnName: colName,
+    expectedType: col ? columnTypeToValueType(col.type) : undefined,
+  };
+}
+
 function classifyWhereTokens(
   whereTokens: readonly LexToken[],
   tableName: string | undefined,
@@ -908,17 +948,22 @@ function classifyWhereTokens(
   }
 
   if (last.kind === "operator" && COMPARISON_OPERATORS.has(last.lexeme)) {
-    const colTok = whereTokens[whereTokens.length - 2];
-    const colName = isMemberNameToken(colTok) ? colTok.lexeme : undefined;
-    const table = tableName ? schema.tablesByName.get(tableName) : undefined;
-    const col = colName
-      ? table?.columns?.find((c) => c.name === colName)
-      : undefined;
-    return {
-      kind: "where-value",
-      columnName: colName,
-      expectedType: col ? columnTypeToValueType(col.type) : undefined,
-    };
+    return buildWhereValueResult(
+      whereTokens[whereTokens.length - 2],
+      tableName,
+      schema,
+    );
+  }
+
+  if (isIncompleteFloatTail(whereTokens)) {
+    const opTok = whereTokens[whereTokens.length - 3];
+    if (opTok?.kind === "operator" && COMPARISON_OPERATORS.has(opTok.lexeme)) {
+      return buildWhereValueResult(
+        whereTokens[whereTokens.length - 4],
+        tableName,
+        schema,
+      );
+    }
   }
 
   const prev = whereTokens[whereTokens.length - 2];
@@ -1378,6 +1423,7 @@ function classifyStatement(
       const tail = rhs[rhs.length - 1];
       if (
         unclosedDepth > 0 ||
+        isIncompleteFloatTail(rhs) ||
         (tail.kind === "operator" && CONTINUATION_OPERATORS.has(tail.lexeme)) ||
         isDelimiter(tail, "(") ||
         isKeyword(tail, "and") ||
@@ -1639,11 +1685,11 @@ export function analyzeCursorContext(
 
   const lastTok = allPreceding[allPreceding.length - 1];
 
-  // 1. Preceded by '.' -> member-access
+  // 1. Preceded by '.' -> member-access (skip non-member prefixes like `1.` decimal entry)
   if (isDelimiter(lastTok, ".")) {
     const chain = collectMemberChain(allPreceding);
-    const ctx = base("member-access");
     if (chain.length > 0) {
+      const ctx = base("member-access");
       const owner = chain.join(".");
       ctx.memberOwner = owner;
       ctx.memberChain = chain;
@@ -1675,8 +1721,8 @@ export function analyzeCursorContext(
           }
         }
       }
+      return ctx;
     }
-    return ctx;
   }
 
   // 2. Preceded by 'end' on the same line -> end-block

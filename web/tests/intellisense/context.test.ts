@@ -490,4 +490,119 @@ describe("grammar-state cursor context classifier", () => {
       prefix: "fi",
     });
   });
+
+  it("handles decimal numeric entry without hijacking as member-access and supports parenthesized where/comparison RHS", () => {
+    // Issue 1: numeric decimal entry after '.' must not become member-access
+    expect(
+      ctxAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when sbp.latest > 1.|\nend rule",
+        sepsis,
+      ),
+    ).toMatchObject({
+      kind: "comparison-rhs",
+      expectedType: "Number",
+      lhsHintName: "sbp",
+    });
+    expect(ctxAt("rule R:\n    let t := 38.|\nend rule", sepsis).kind).toBe(
+      "let-rhs",
+    );
+
+    // Issue 2a: parenthesized where clauses in when/let
+    expect(
+      ctxAt(
+        'rule R:\n    when latest heart_rate_readings where (status == "fi|\nend rule',
+        temporal,
+      ),
+    ).toMatchObject({
+      kind: "where-string-value",
+      resolvedTableName: "heart_rate_readings",
+      resolvedColumnName: "status",
+      prefix: "fi",
+    });
+    expect(
+      ctxAt(
+        "rule R:\n    when latest heart_rate_readings where (status == |\nend rule",
+        temporal,
+      ),
+    ).toMatchObject({
+      kind: "where-value",
+      resolvedTableName: "heart_rate_readings",
+      resolvedColumnName: "status",
+      expectedType: "String",
+    });
+    expect(
+      ctxAt(
+        "rule R:\n    when latest heart_rate_readings where (|\nend rule",
+        temporal,
+      ),
+    ).toMatchObject({
+      kind: "where-column",
+      resolvedTableName: "heart_rate_readings",
+    });
+
+    // Issue 2b: parenthesized comparison RHS vs parenthesized boolean clause
+    expect(
+      ctxAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when sbp.latest < (|\nend rule",
+        sepsis,
+      ),
+    ).toMatchObject({
+      kind: "comparison-rhs",
+      expectedType: "Number",
+      lhsHintName: "sbp",
+    });
+    expect(
+      ctxAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when sbp.latest < (10 + |\nend rule",
+        sepsis,
+      ),
+    ).toMatchObject({
+      kind: "comparison-rhs",
+      expectedType: "Number",
+      lhsHintName: "sbp",
+    });
+    expect(
+      ctxAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when (sbp.latest < 90) and (|\nend rule",
+        sepsis,
+      ).kind,
+    ).toBe("when-condition-start");
+    expect(
+      ctxAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when (sbp.latest < (10 + |\nend rule",
+        sepsis,
+      ),
+    ).toMatchObject({
+      kind: "comparison-rhs",
+      expectedType: "Number",
+      lhsHintName: "sbp",
+    });
+    expect(
+      ctxAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when sbp.latest < (1.|\nend rule",
+        sepsis,
+      ),
+    ).toMatchObject({
+      kind: "comparison-rhs",
+      expectedType: "Number",
+      lhsHintName: "sbp",
+    });
+    expect(
+      ctxAt(
+        'rule R:\n    when (latest heart_rate_readings where status == "final") and (|\nend rule',
+        temporal,
+      ).kind,
+    ).toBe("when-condition-start");
+    expect(
+      ctxAt(
+        "rule R:\n    bind hr = Vitals.heart_rate where value > 38.|\nend rule",
+        temporal,
+      ),
+    ).toMatchObject({
+      kind: "where-value",
+      resolvedTableName: "heart_rate_readings",
+      resolvedColumnName: "value",
+      expectedType: "Number",
+    });
+  });
 });

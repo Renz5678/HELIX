@@ -279,9 +279,8 @@ describe("deterministic inline ghost-text engine", () => {
       ghostAt("rule R:\n    bind f = Flags where val == |", boolDataset)?.insertText,
     ).toBe("42");
     expect(
-      ghostAt("rule R:\n    bind f = Flags where active == |", boolDataset)
-        ?.insertText,
-    ).toBe("true");
+      ghostAt("rule R:\n    bind f = Flags where active == |", boolDataset),
+    ).toBeNull();
     expect(
       ghostAt("rule R:\n    bind f = Flags where empty_col == |", boolDataset),
     ).toBeNull();
@@ -423,6 +422,42 @@ describe("deterministic inline ghost-text engine", () => {
         temporal,
       ),
     ).toBeNull();
+
+    // Prevent `.latest.` ghosting `.latest` again
+    expect(
+      ghostAt(
+        "rule R:\n    source glucose_data\n    when glucose_data.latest.|\nend rule",
+        glucose,
+      ),
+    ).toBeNull();
+    expect(
+      ghostAt(
+        "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when sbp.latest.|\nend rule",
+        sepsis,
+      ),
+    ).toBeNull();
+
+    // Rule 2: same-named rule must not shadow bound/source series
+    expect(
+      ghostAt(
+        "rule Vitals:\n    source Vitals\n    let vitals_limit := 100\n    when Vitals.|",
+        sepsis,
+      )?.insertText,
+    ).toBe("latest > vitals_limit");
+
+    // Rule 9: blank line inside bind before `where` or `within` must not ghost `end bind`
+    expect(
+      ghostAt(
+        'rule R:\n    bind hr = Vitals.heart_rate\n    |\n    where status == "final"\n    end bind\nend rule',
+        temporal,
+      ),
+    ).toBeNull();
+    expect(
+      ghostAt(
+        "rule R:\n    bind hr = Vitals.heart_rate\n    |\n    within 30 minutes\n    end bind\nend rule",
+        temporal,
+      ),
+    ).toBeNull();
   });
 
   it("computes inline predictions on a 500-line document well under 15 ms", () => {
@@ -434,6 +469,18 @@ describe("deterministic inline ghost-text engine", () => {
     lines.push("    then:");
     lines.push("        suppress: |");
     const srcWithCaret = lines.join("\n");
+    // Warm up V8 JIT on a small scratch input with a fresh dataset clone
+    ghostAt(
+      [
+        "rule Warmup:",
+        "    source glucose_data",
+        ...Array.from({ length: 40 }, (_, i) => `    let w_${i} := ${i}`),
+        "    when glucose_data.latest > w_0:",
+        "    then:",
+        "        suppress: |",
+      ].join("\n"),
+      structuredClone(glucoseData) as Dataset,
+    );
     const start = performance.now();
     const pred = ghostAt(srcWithCaret, glucose);
     const elapsed = performance.now() - start;

@@ -1,4 +1,4 @@
-import type { Analysis, Diagnostic, Evaluation } from "./types";
+import type { Analysis, Dataset, Diagnostic, Evaluation } from "./types";
 
 export interface DiagnosticEntry {
   d: Diagnostic;
@@ -140,4 +140,26 @@ export function isEvaluationStale(
   currentRevision: number,
 ): boolean {
   return evaluation !== null && evalRevision !== currentRevision;
+}
+
+/**
+ * Returns true when the dataset-change effect should schedule background
+ * `validate()`, avoiding redundant validation right after `analyze()` already
+ * started validation for the same dataset reference.
+ */
+export function shouldScheduleDatasetValidation(input: {
+  autoAnalyze: boolean;
+  ready: boolean;
+  analysisSuccess: boolean | undefined;
+  errorCount: number;
+  dataset: Dataset;
+  lastValidatedDataset: Dataset | null;
+}): boolean {
+  return Boolean(
+    input.autoAnalyze &&
+      input.ready &&
+      input.analysisSuccess &&
+      input.errorCount === 0 &&
+      input.dataset !== input.lastValidatedDataset,
+  );
 }

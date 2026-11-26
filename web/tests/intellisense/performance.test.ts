@@ -127,6 +127,15 @@ describe("IntelliSense performance budgets and coordinator engine", () => {
     engine.clearCache();
     const rebuilt = engine.getDocument("file:///mru.helix", 1, exprSrc, ds);
     expect(rebuilt.doc).not.toBe(cached.doc);
+
+    // Exact source check even when uri, versionId, dataset, and sourceLength match
+    const sameLenA = "rule RuleA:\nend rule";
+    const sameLenB = "rule RuleB:\nend rule";
+    expect(sameLenA.length).toBe(sameLenB.length);
+    const hitA = engine.getDocument("file:///same-len.helix", 1, sameLenA, ds);
+    const hitB = engine.getDocument("file:///same-len.helix", 1, sameLenB, ds);
+    expect(hitB.doc).not.toBe(hitA.doc);
+    expect(hitB.doc.source).toBe(sameLenB);
   });
 
   it("indexes 500+ lines cold under 10 ms, hits cache in O(1), and answers completions/ghost-text under 15 ms", () => {
@@ -135,6 +144,41 @@ describe("IntelliSense performance budgets and coordinator engine", () => {
     const engine = new HelixIntelliSense();
     const lines = src.split("\n");
     expect(lines.length).toBeGreaterThan(500);
+
+    // Warm V8 JIT with a distinct URI and scratch dataset so file:///perf.helix and `ds` stay cold
+    const warmupDs = make200RowDataset(10);
+    const warmupSrc = Array.from({ length: 4 }, (_, i) =>
+      [
+        `rule Warmup${i}:`,
+        `    bind sbp_${i} = Vitals.systolic_bp where status == "final" within 30 minutes`,
+        `    end bind`,
+        `    let t_${i} := ${90 + i}`,
+        `    when sbp_${i}.latest < t_${i}:`,
+        `    then:`,
+        `        alert: "Warmup", "WARNING", sbp_${i}.latest`,
+        `        suppress: within 4 hours`,
+        `    otherwise:`,
+        `        let ok_${i} := "ok"`,
+        `    end when`,
+        `end rule`,
+      ].join("\n"),
+    ).join("\n");
+    engine.provideCompletions(
+      "file:///warmup.helix",
+      1,
+      warmupSrc,
+      warmupDs,
+      { lineNumber: 5, column: 25 },
+      "warmup.helix",
+    );
+    engine.provideInlinePrediction(
+      "file:///warmup.helix",
+      1,
+      warmupSrc,
+      warmupDs,
+      { lineNumber: 5, column: 25 },
+      true,
+    );
 
     const t0 = performance.now();
     const first = engine.getDocument("file:///perf.helix", 1, src, ds);

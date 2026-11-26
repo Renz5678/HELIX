@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import type { Analysis, Diagnostic, Evaluation } from "../src/services/types";
+import type { Analysis, Dataset, Diagnostic, Evaluation } from "../src/services/types";
 import {
   combineDiagnosticEntries,
   getDatasetEditDiagnosticPatch,
   isEvaluationStale,
   resolveMarkerSync,
   shouldApplyModelMarkers,
+  shouldScheduleDatasetValidation,
 } from "../src/services/diagnostics";
 
 const semanticDiag: Diagnostic = {
@@ -226,5 +227,61 @@ describe("dataset edit stale evaluation markers (Scenario 2)", () => {
       apply: true,
       entries: [{ d: semanticDiag, source: s1 }],
     });
+  });
+
+  it("avoids redundant validate() on initial load and syntax recovery while scheduling on real dataset edits", () => {
+    const ds0 = {
+      schemaVersion: 1,
+      evaluationTime: "2026-10-31T12:00:00Z",
+      Bindings: {},
+      tables: [],
+    } satisfies Dataset;
+    const ds1 = { ...ds0 };
+
+    // Initial load / syntax recovery: analyze() already called validate() on ds0
+    expect(
+      shouldScheduleDatasetValidation({
+        autoAnalyze: true,
+        ready: true,
+        analysisSuccess: true,
+        errorCount: 0,
+        dataset: ds0,
+        lastValidatedDataset: ds0,
+      }),
+    ).toBe(false);
+
+    // Dataset mutated to a new reference -> should schedule validate()
+    expect(
+      shouldScheduleDatasetValidation({
+        autoAnalyze: true,
+        ready: true,
+        analysisSuccess: true,
+        errorCount: 0,
+        dataset: ds1,
+        lastValidatedDataset: ds0,
+      }),
+    ).toBe(true);
+
+    // Draft errors block validation until cleared
+    expect(
+      shouldScheduleDatasetValidation({
+        autoAnalyze: true,
+        ready: true,
+        analysisSuccess: true,
+        errorCount: 1,
+        dataset: ds1,
+        lastValidatedDataset: ds0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldScheduleDatasetValidation({
+        autoAnalyze: true,
+        ready: true,
+        analysisSuccess: true,
+        errorCount: 0,
+        dataset: ds1,
+        lastValidatedDataset: null,
+      }),
+    ).toBe(true);
   });
 });

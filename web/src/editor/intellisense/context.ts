@@ -73,6 +73,7 @@ export interface CursorContext {
   alertArgIndex?: number;
   terminologySystem?: TerminologySystem;
   withinNumber?: number;
+  withinHasBefore?: boolean;
   bindAlias?: string;
   hasOtherwise?: boolean;
   hasThen?: boolean;
@@ -550,10 +551,22 @@ function resolveSeriesTarget(
   return {};
 }
 
+interface WithinTrailingResult {
+  kind: "within-amount" | "within-unit" | "within-post";
+  withinNumber?: number;
+  withinHasBefore?: boolean;
+}
+
+function applyWithinMeta(ctx: CursorContext, within: WithinTrailingResult): CursorContext {
+  if (within.withinNumber !== undefined) ctx.withinNumber = within.withinNumber;
+  if (within.withinHasBefore) ctx.withinHasBefore = true;
+  return ctx;
+}
+
 function checkWithinTrailing(
   tokens: readonly LexToken[],
   posLine: number,
-): { kind: "within-amount" | "within-unit" | "within-post"; withinNumber?: number } | null {
+): WithinTrailingResult | null {
   let depth = 0;
   let withinIdx = -1;
   for (let i = tokens.length - 1; i >= 0; i--) {
@@ -582,6 +595,16 @@ function checkWithinTrailing(
     return null;
   }
 
+  if (
+    after.length === 2 &&
+    after[0].kind === "string" &&
+    after[1].kind === "identifier" &&
+    after[1].lexeme === "before" &&
+    after[1].line === posLine
+  ) {
+    return { kind: "within-post", withinHasBefore: true };
+  }
+
   const numTok = after[0];
   const unitTok = after[1];
   if (
@@ -599,7 +622,7 @@ function checkWithinTrailing(
       after[2].lexeme === "before" &&
       after[2].line === posLine
     ) {
-      return { kind: "within-post", withinNumber: num };
+      return { kind: "within-post", withinNumber: num, withinHasBefore: true };
     }
   }
   return null;
@@ -1141,10 +1164,10 @@ function classifyStringContext(
     }
   }
 
-  // 3. Alert severity string (inside alert arg index >= 1)
+  // 3. Alert severity string (inside alert arg index 1 or after level:)
   if (stmtStartIdx !== -1 && isKeyword(stmtTokens[0], "alert")) {
     const { argIndex, hasLevelPrefix } = countAlertArgs(stmtTokens.slice(1));
-    if (!hasLevelPrefix && argIndex >= 1) {
+    if (argIndex === 1 || hasLevelPrefix) {
       const ctx = makeStrCtx("alert-severity-string");
       ctx.alertArgIndex = argIndex;
       return ctx;
@@ -1263,9 +1286,7 @@ function classifyBindBlock(
   if (withinStart !== -1) {
     const within = checkWithinTrailing(rest.slice(withinStart), posLine);
     if (within) {
-      const ctx = applyBindMeta(base(within.kind));
-      if (within.withinNumber !== undefined) ctx.withinNumber = within.withinNumber;
-      return ctx;
+      return applyWithinMeta(applyBindMeta(base(within.kind)), within);
     }
     return applyBindMeta(base("bind-clause"));
   }
@@ -1318,9 +1339,7 @@ function classifyExpressionClause(
 ): CursorContext | null {
   const within = checkWithinTrailing(exprTokens, posLine);
   if (within) {
-    const ctx = base(within.kind);
-    if (within.withinNumber !== undefined) ctx.withinNumber = within.withinNumber;
-    return ctx;
+    return applyWithinMeta(base(within.kind), within);
   }
 
   if (inWhereAllowed) {
@@ -1483,9 +1502,7 @@ function classifyStatement(
       }
       const within = checkWithinTrailing(rest, posLine);
       if (within) {
-        const ctx = base(within.kind);
-        if (within.withinNumber !== undefined) ctx.withinNumber = within.withinNumber;
-        return ctx;
+        return applyWithinMeta(base(within.kind), within);
       }
       if (isStatementCompleteOnPrevLine(stmtTokens, posLine)) {
         return base(defaultKind);
@@ -1509,9 +1526,7 @@ function classifyStatement(
     case "schedule": {
       const within = checkWithinTrailing(stmtTokens.slice(1), posLine);
       if (within) {
-        const ctx = base(within.kind);
-        if (within.withinNumber !== undefined) ctx.withinNumber = within.withinNumber;
-        return ctx;
+        return applyWithinMeta(base(within.kind), within);
       }
       return base(defaultKind);
     }

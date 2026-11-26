@@ -101,28 +101,34 @@ function makeToken(
 }
 
 function skipWhitespaceAndComments(state: LexerState): void {
-  while (!isAtEnd(state)) {
-    const code = peekCode(state);
-    if (code === 32 || code === 9 || code === 13 || code === 10) {
+  const src = state.source;
+  const len = state.length;
+  while (state.cursor < len) {
+    const code = src.charCodeAt(state.cursor);
+    if (code === 32 || code === 9) {
+      state.cursor++;
+      state.column++;
+    } else if (code === 13 || code === 10) {
       advance(state);
     } else if (code === 35) {
       // '#' comment: stop before NUL, CR, LF, or EOF
       const startOffset = state.cursor;
       const startLine = state.line;
       const startColumn = state.column;
-      while (!isAtEnd(state)) {
-        const ch = peekCode(state);
+      while (state.cursor < len) {
+        const ch = src.charCodeAt(state.cursor);
         if (ch === 0 || ch === 10 || ch === 13) {
           break;
         }
-        advance(state);
+        state.cursor++;
+        state.column++;
       }
       state.comments.push({
         startOffset,
         endOffset: state.cursor,
         line: startLine,
         column: startColumn,
-        text: state.source.slice(startOffset, state.cursor),
+        text: src.slice(startOffset, state.cursor),
       });
     } else {
       break;
@@ -134,13 +140,17 @@ function scanIdentifierOrKeyword(state: LexerState): LexToken {
   const startOffset = state.cursor;
   const startLine = state.line;
   const startColumn = state.column;
+  const src = state.source;
+  const len = state.length;
 
-  advance(state);
-  while (isIdentContinue(peekCode(state))) {
-    advance(state);
+  let cursor = startOffset + 1;
+  while (cursor < len && isIdentContinue(src.charCodeAt(cursor))) {
+    cursor++;
   }
+  state.column += cursor - startOffset;
+  state.cursor = cursor;
 
-  const lexeme = state.source.slice(startOffset, state.cursor);
+  const lexeme = src.slice(startOffset, cursor);
   const kind: LexTokenKind = HELIX_KEYWORD_SET.has(lexeme)
     ? "keyword"
     : "identifier";
@@ -151,30 +161,39 @@ function scanNumber(state: LexerState): LexToken {
   const startOffset = state.cursor;
   const startLine = state.line;
   const startColumn = state.column;
+  const src = state.source;
+  const len = state.length;
+  let cursor = startOffset;
 
-  while (isDigit(peekCode(state))) {
-    advance(state);
+  while (cursor < len && isDigit(src.charCodeAt(cursor))) {
+    cursor++;
   }
 
   let isFloat = false;
-  if (peekCode(state) === 46 && isDigit(peekNextCode(state))) {
+  if (
+    cursor + 1 < len &&
+    src.charCodeAt(cursor) === 46 &&
+    isDigit(src.charCodeAt(cursor + 1))
+  ) {
     isFloat = true;
-    advance(state); // consume '.'
-    while (isDigit(peekCode(state))) {
-      advance(state);
+    cursor++; // consume '.'
+    while (cursor < len && isDigit(src.charCodeAt(cursor))) {
+      cursor++;
     }
   }
 
   // Malformed trailing identifier characters, e.g. 123abc
-  const next = peekCode(state);
+  const next = cursor < len ? src.charCodeAt(cursor) : -1;
   if (isAsciiAlpha(next) || next === 95) {
-    while (isIdentContinue(peekCode(state))) {
-      advance(state);
+    while (cursor < len && isIdentContinue(src.charCodeAt(cursor))) {
+      cursor++;
     }
+    state.column += cursor - startOffset;
+    state.cursor = cursor;
     return makeToken(
       state,
       "error",
-      state.source.slice(startOffset, state.cursor),
+      src.slice(startOffset, cursor),
       startOffset,
       startLine,
       startColumn
@@ -182,24 +201,31 @@ function scanNumber(state: LexerState): LexToken {
   }
 
   // Malformed multiple decimal points, e.g. 12.34.56
-  if (isFloat && peekCode(state) === 46) {
-    while (isDigit(peekCode(state)) || peekCode(state) === 46) {
-      advance(state);
+  if (isFloat && next === 46) {
+    while (
+      cursor < len &&
+      (isDigit(src.charCodeAt(cursor)) || src.charCodeAt(cursor) === 46)
+    ) {
+      cursor++;
     }
+    state.column += cursor - startOffset;
+    state.cursor = cursor;
     return makeToken(
       state,
       "error",
-      state.source.slice(startOffset, state.cursor),
+      src.slice(startOffset, cursor),
       startOffset,
       startLine,
       startColumn
     );
   }
 
+  state.column += cursor - startOffset;
+  state.cursor = cursor;
   return makeToken(
     state,
     isFloat ? "float" : "int",
-    state.source.slice(startOffset, state.cursor),
+    src.slice(startOffset, cursor),
     startOffset,
     startLine,
     startColumn
@@ -274,40 +300,50 @@ function scanOperatorOrDelimiter(state: LexerState): LexToken {
   const startOffset = state.cursor;
   const startLine = state.line;
   const startColumn = state.column;
-  const code = advance(state);
+  const src = state.source;
+  const len = state.length;
+  const code = src.charCodeAt(startOffset);
+  state.cursor = startOffset + 1;
+  state.column = startColumn + 1;
+  const nextCode = state.cursor < len ? src.charCodeAt(state.cursor) : -1;
 
   switch (code) {
     case 58: // ':'
-      if (peekCode(state) === 61) {
-        advance(state);
+      if (nextCode === 61) {
+        state.cursor++;
+        state.column++;
         return makeToken(state, "operator", ":=", startOffset, startLine, startColumn);
       }
       return makeToken(state, "delimiter", ":", startOffset, startLine, startColumn);
 
     case 61: // '='
-      if (peekCode(state) === 61) {
-        advance(state);
+      if (nextCode === 61) {
+        state.cursor++;
+        state.column++;
         return makeToken(state, "operator", "==", startOffset, startLine, startColumn);
       }
       return makeToken(state, "operator", "=", startOffset, startLine, startColumn);
 
     case 33: // '!'
-      if (peekCode(state) === 61) {
-        advance(state);
+      if (nextCode === 61) {
+        state.cursor++;
+        state.column++;
         return makeToken(state, "operator", "!=", startOffset, startLine, startColumn);
       }
       return makeToken(state, "error", "!", startOffset, startLine, startColumn);
 
     case 60: // '<'
-      if (peekCode(state) === 61) {
-        advance(state);
+      if (nextCode === 61) {
+        state.cursor++;
+        state.column++;
         return makeToken(state, "operator", "<=", startOffset, startLine, startColumn);
       }
       return makeToken(state, "operator", "<", startOffset, startLine, startColumn);
 
     case 62: // '>'
-      if (peekCode(state) === 61) {
-        advance(state);
+      if (nextCode === 61) {
+        state.cursor++;
+        state.column++;
         return makeToken(state, "operator", ">=", startOffset, startLine, startColumn);
       }
       return makeToken(state, "operator", ">", startOffset, startLine, startColumn);
@@ -316,8 +352,9 @@ function scanOperatorOrDelimiter(state: LexerState): LexToken {
       return makeToken(state, "operator", "+", startOffset, startLine, startColumn);
 
     case 45: // '-'
-      if (peekCode(state) === 62) {
-        advance(state);
+      if (nextCode === 62) {
+        state.cursor++;
+        state.column++;
         return makeToken(state, "operator", "->", startOffset, startLine, startColumn);
       }
       return makeToken(state, "operator", "-", startOffset, startLine, startColumn);
@@ -350,13 +387,14 @@ function scanOperatorOrDelimiter(state: LexerState): LexToken {
       if (code === 0) {
         return makeToken(state, "error", "\\x00", startOffset, startLine, startColumn);
       }
-      if (isHighSurrogate(code) && isLowSurrogate(peekCode(state))) {
-        advance(state);
+      if (isHighSurrogate(code) && isLowSurrogate(nextCode)) {
+        state.cursor++;
+        state.column++;
       }
       return makeToken(
         state,
         "error",
-        state.source.slice(startOffset, state.cursor),
+        src.slice(startOffset, state.cursor),
         startOffset,
         startLine,
         startColumn

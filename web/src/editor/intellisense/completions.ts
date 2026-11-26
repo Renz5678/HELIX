@@ -59,7 +59,6 @@ const PRIMARY_TIME_UNITS = new Set([
   "hours",
   "days",
   "seconds",
-  "weeks",
 ]);
 
 const SHORT_MINUTE_PRESETS = new Set([15, 30, 45, 60]);
@@ -441,13 +440,16 @@ function buildTopLevel(
     : "Number";
 
   let conditionLine: string;
-  let letLine: string;
+  let letLine: string | null = null;
+  let alertMsgTab = 6;
+  let alertSevTab = 7;
   if (colValType === "String") {
     letLine = `    let \${4:expected_status} := "\${5:final}"`;
     conditionLine = `    when \${3:${target.alias}}.latest == \${4:expected_status}:`;
   } else if (colValType === "Boolean") {
-    letLine = `    let \${4:expected_flag} := \${5:true}`;
-    conditionLine = `    when \${3:${target.alias}}.latest == \${4:expected_flag}:`;
+    conditionLine = `    when \${3:${target.alias}}.latest:`;
+    alertMsgTab = 4;
+    alertSevTab = 5;
   } else {
     const defaultThreshold =
       target.sampleMax !== undefined ? String(Math.round(target.sampleMax)) : "100";
@@ -460,10 +462,10 @@ function buildTopLevel(
     `    intent: "\${2:Clinical alert rule}"`,
     `    bind \${3:${target.alias}} = ${target.seriesPath}`,
     `    end bind`,
-    letLine,
+    ...(letLine ? [letLine] : []),
     conditionLine,
     `    then:`,
-    `        alert: "\${6:Alert triggered}", "\${7|WARNING,CRITICAL,INFO|}", \${3:${target.alias}}.latest`,
+    `        alert: "\${${alertMsgTab}:Alert triggered}", "\${${alertSevTab}|WARNING,CRITICAL,INFO|}", \${3:${target.alias}}.latest`,
     `    end when`,
     `end rule`,
   ].join("\n");
@@ -544,7 +546,9 @@ function buildRuleBody(
           path,
           colName: strCol,
           valLiteral:
-            sample !== undefined ? formatLiteralForType(sample) : '"final"',
+            typeof sample === "string"
+              ? formatLiteralForType(sample)
+              : '"final"',
         };
       }
     }
@@ -552,13 +556,32 @@ function buildRuleBody(
       ? schema.tablesByName.get(target.tableName)
       : undefined;
     const strCol = findStringFilterColumn(table);
-    const colName = strCol ?? target.columnName ?? "status";
+    const numCol = !strCol
+      ? table?.columns?.find(
+          (c) =>
+            (c.type === "Integer" || c.type === "Float") &&
+            c.name !== table.patientIdColumn &&
+            c.name !== table.timestampColumn,
+        )?.name
+      : undefined;
+    const colName = strCol ?? numCol ?? target.columnName ?? "status";
+    const colObj = table?.columns?.find((c) => c.name === colName);
+    const isBoolCol =
+      colObj?.type === "Boolean" ||
+      (!colObj && target.columnType === "Boolean");
+    if (isBoolCol) {
+      return {
+        path: target.seriesPath,
+        colName,
+        valLiteral: null as string | null,
+      };
+    }
     const sample =
       target.tableName && colName
         ? schema.getColumnSamples(target.tableName, colName).values[0]
         : undefined;
     const valLiteral =
-      sample !== undefined
+      sample !== undefined && typeof sample !== "boolean"
         ? formatLiteralForType(sample)
         : strCol
           ? '"final"'
@@ -573,7 +596,9 @@ function buildRuleBody(
   const unusedAlias =
     deriveBindAliases(doc, schema, ctx.offset)[0] ?? target.alias;
   const bindSnippet = [
-    `bind \${1:${unusedAlias}} = \${2:${filterTarget.path}} where \${3:${filterTarget.colName}} == \${4:${filterTarget.valLiteral}} within \${5:30 minutes}`,
+    filterTarget.valLiteral !== null
+      ? `bind \${1:${unusedAlias}} = \${2:${filterTarget.path}} where \${3:${filterTarget.colName}} == \${4:${filterTarget.valLiteral}} within \${5:30 minutes}`
+      : `bind \${1:${unusedAlias}} = \${2:${filterTarget.path}} where \${3:${filterTarget.colName}} within \${4:30 minutes}`,
     `end bind`,
   ].join("\n");
 
@@ -809,10 +834,13 @@ function buildWhereValue(
     ? columnTypeToValueType(col.type)
     : ctx.expectedType ?? "Unknown";
 
-  if (tableName && colName) {
+  if (tableName && colName && colValueType !== "Boolean") {
     const samples = schema.getColumnSamples(tableName, colName);
     const total = Math.max(1, samples.nonNullCount);
     for (const val of samples.values) {
+      if (typeof val === "boolean") {
+        continue;
+      }
       if (ctx.kind === "where-string-value" && typeof val !== "string") {
         continue;
       }
@@ -842,21 +870,6 @@ function buildWhereValue(
   }
 
   if (ctx.kind === "where-value") {
-    if (colValueType === "Boolean") {
-      for (const b of ["true", "false"]) {
-        specs.push({
-          label: b,
-          kind: "value",
-          detail: "Boolean literal",
-          scoreInput: {
-            base: 860,
-            candidateType: "Boolean",
-            expectedType: ctx.expectedType,
-          },
-        });
-      }
-    }
-
     for (const sym of visibleSymbolsAt(doc, ctx.offset)) {
       if (sym.kind !== "let" && sym.kind !== "for") continue;
       specs.push({
@@ -889,10 +902,15 @@ function buildMemberAccess(
   const specs: CandidateSpec[] = [];
   const owner = ctx.memberOwner ?? "";
   const chain = ctx.memberChain ?? (owner ? owner.split(".") : []);
+  if (chain[chain.length - 1] === "latest") {
+    return specs;
+  }
   const visible = visibleSymbolsAt(doc, ctx.offset);
 
   const headName = chain[0] ?? owner;
-  const ownerSym = visible.find((s) => s.name === headName);
+  const ownerSym = visible.find(
+    (s) => s.name === headName && (s.kind === "bind" || s.kind === "source"),
+  );
 
   if (
     ownerSym &&
@@ -1099,9 +1117,14 @@ function buildComparisonRhs(
           },
         });
       }
-      if (samples.min === undefined && samples.values.length > 0) {
+      if (
+        samples.min === undefined &&
+        samples.values.length > 0 &&
+        valType !== "Boolean"
+      ) {
         const total = Math.max(1, samples.nonNullCount);
         for (const val of samples.values.slice(0, 5)) {
+          if (typeof val === "boolean") continue;
           const lit = formatLiteralForType(val);
           const count = samples.counts.get(val) ?? 0;
           specs.push({
@@ -1442,7 +1465,7 @@ function buildWithinUnit(ctx: CursorContext): CandidateSpec[] {
       label: unit,
       kind: "unit",
       syntaxOnly: true,
-      detail: `${SYNTAX_ONLY_DETAIL} — Calendar duration unit`,
+      detail: `${SYNTAX_ONLY_DETAIL} — Parser-only duration unit`,
       scoreInput: { base: 760 - idx },
     });
   });
@@ -1814,46 +1837,55 @@ export function buildCompletions(
       break;
 
     case "within-post":
-      specs = [
-        {
-          label: "before now",
-          kind: "keyword",
-          detail: "Anchor window relative to evaluation clock",
-          scoreInput: { base: 900 },
-        },
-        ...(ctx.inBind
-          ? [
-              {
-                label: "end bind",
-                kind: "keyword" as const,
-                detail: "Close bind block",
-                scoreInput: { base: 880 },
-              },
-            ]
-          : []),
-        ...(ctx.inWhen && !ctx.hasThen
-          ? [
-              {
-                label: "then:",
-                kind: "keyword" as const,
-                detail: "Begin `then:` action branch",
-                scoreInput: { base: 880 },
-              },
-              {
-                label: "and",
-                kind: "keyword" as const,
-                detail: "Logical conjunction",
-                scoreInput: { base: 840 },
-              },
-              {
-                label: "or",
-                kind: "keyword" as const,
-                detail: "Logical disjunction",
-                scoreInput: { base: 835 },
-              },
-            ]
-          : []),
-      ];
+      specs = ctx.withinHasBefore
+        ? [
+            {
+              label: "now",
+              kind: "keyword",
+              detail: "Anchor window relative to evaluation clock",
+              scoreInput: { base: 920 },
+            },
+          ]
+        : [
+            {
+              label: "before now",
+              kind: "keyword",
+              detail: "Anchor window relative to evaluation clock",
+              scoreInput: { base: 900 },
+            },
+            ...(ctx.inBind
+              ? [
+                  {
+                    label: "end bind",
+                    kind: "keyword" as const,
+                    detail: "Close bind block",
+                    scoreInput: { base: 880 },
+                  },
+                ]
+              : []),
+            ...(ctx.inWhen && !ctx.hasThen
+              ? [
+                  {
+                    label: "then:",
+                    kind: "keyword" as const,
+                    detail: "Begin `then:` action branch",
+                    scoreInput: { base: 880 },
+                  },
+                  {
+                    label: "and",
+                    kind: "keyword" as const,
+                    detail: "Logical conjunction",
+                    scoreInput: { base: 840 },
+                  },
+                  {
+                    label: "or",
+                    kind: "keyword" as const,
+                    detail: "Logical disjunction",
+                    scoreInput: { base: 835 },
+                  },
+                ]
+              : []),
+          ];
       break;
 
     case "terminology-system":

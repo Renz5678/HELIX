@@ -35,7 +35,6 @@ interface CachedDocumentEntry {
   uri: string;
   versionId: number;
   dataset: Dataset;
-  sourceLength: number;
   doc: DocumentIndex;
   schema: DatasetSchemaIndex;
 }
@@ -65,7 +64,7 @@ export class HelixIntelliSense {
       hit &&
       hit.versionId === versionId &&
       hit.dataset === dataset &&
-      hit.sourceLength === source.length
+      hit.doc.source === source
     ) {
       // Refresh LRU position on hit
       this.cache.delete(uri);
@@ -79,7 +78,6 @@ export class HelixIntelliSense {
       uri,
       versionId,
       dataset,
-      sourceLength: source.length,
       doc,
       schema,
     };

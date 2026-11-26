@@ -39,6 +39,7 @@ import {
   getDatasetEditDiagnosticPatch,
   isEvaluationStale,
   resolveMarkerSync,
+  shouldScheduleDatasetValidation,
   type DiagnosticEntry,
 } from "./services/diagnostics";
 import { registerHelixLanguage } from "./editor/language";
@@ -136,7 +137,8 @@ export default function App() {
     fileInput = useRef<HTMLInputElement>(null),
     current = useRef(workspace),
     draftErrorsRef = useRef(draftErrors),
-    semanticSourceRef = useRef(semanticSource);
+    semanticSourceRef = useRef(semanticSource),
+    lastValidatedDatasetRef = useRef<Dataset | null>(null);
   current.current = workspace;
   draftErrorsRef.current = draftErrors;
   semanticSourceRef.current = semanticSource;
@@ -177,6 +179,7 @@ export default function App() {
   }
   function connect() {
     engine.current?.dispose();
+    lastValidatedDatasetRef.current = null;
     setReady(false);
     setState("Loading engine");
     setEngineError("");
@@ -229,12 +232,14 @@ export default function App() {
         validateDataset(dataset).length > 0 ||
         Object.keys(draftErrorsRef.current).length > 0
       ) {
+        lastValidatedDatasetRef.current = null;
         if (semanticSourceRef.current !== source) {
           setSemanticDiagnostics([]);
           setSemanticSource("");
         }
         return;
       }
+      lastValidatedDatasetRef.current = dataset;
       const id = ++validateId.current;
       try {
         const result = await engine.current.request(
@@ -254,6 +259,9 @@ export default function App() {
         );
         setSemanticSource(source);
       } catch (e) {
+        if (lastValidatedDatasetRef.current === dataset) {
+          lastValidatedDatasetRef.current = null;
+        }
         if (String(e).includes("Superseded") || id !== validateId.current)
           return;
         setSemanticDiagnostics([]);
@@ -288,6 +296,7 @@ export default function App() {
         void validate(source);
       } else {
         validateId.current++;
+        lastValidatedDatasetRef.current = null;
         setSemanticDiagnostics([]);
         setSemanticSource("");
       }
@@ -305,10 +314,14 @@ export default function App() {
   }, [workspace.source, workspace.autoAnalyze, ready, analyze]);
   useEffect(() => {
     if (
-      workspace.autoAnalyze &&
-      ready &&
-      analysis?.success &&
-      errors.length === 0
+      shouldScheduleDatasetValidation({
+        autoAnalyze: workspace.autoAnalyze,
+        ready,
+        analysisSuccess: analysis?.success,
+        errorCount: errors.length,
+        dataset: workspace.dataset,
+        lastValidatedDataset: lastValidatedDatasetRef.current,
+      })
     ) {
       const timer = setTimeout(() => void validate(), 180);
       return () => clearTimeout(timer);
@@ -354,6 +367,7 @@ export default function App() {
     analysisId.current++;
     validateId.current++;
     if (!current.current.autoAnalyze) {
+      lastValidatedDatasetRef.current = null;
       setAnalysis(null);
       setAnalysisSource("");
       setSemanticDiagnostics([]);
@@ -369,6 +383,7 @@ export default function App() {
     const patch = getDatasetEditDiagnosticPatch(current.current.autoAnalyze);
     setEvalRevision(patch.evalRevision);
     if (patch.clearSemantic || validateDataset(dataset).length > 0) {
+      lastValidatedDatasetRef.current = null;
       setSemanticDiagnostics([]);
       setSemanticSource("");
     }
@@ -438,6 +453,7 @@ export default function App() {
     revision.current++;
     analysisId.current++;
     validateId.current++;
+    lastValidatedDatasetRef.current = null;
     baseline.current = source;
     draftErrorsRef.current = {};
     setWorkspace((w) => ({

@@ -163,7 +163,7 @@ const HELIX_KEYWORD_DOCS: Readonly<Record<string, KeywordDoc>> = {
   within: {
     signature: "within <number> <unit> [before now]",
     description:
-      "Restricts readings to an inclusive lookback window (`seconds`, `minutes`, `hours`, `days`, `weeks`; `months`/`years` are syntax-only).",
+      "Restricts readings to an inclusive lookback window (`seconds`, `minutes`, `hours`, `days` / `s`, `m`, `h`, `d` are evaluated; `weeks`, `months`, `years`, and abbreviations like `min`/`hr`/`sec` are parser-only / syntax-only).",
   },
   then: {
     signature: "then:",

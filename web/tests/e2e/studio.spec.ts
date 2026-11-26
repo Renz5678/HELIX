@@ -139,7 +139,7 @@ test("IntelliSense predicts bound series, accepts inline ghost-text, shows hover
   await page.keyboard.press("Enter");
   await page.keyboard.type("then:");
   await page.keyboard.press("Enter");
-  await page.keyboard.type("let fired := true");
+  await page.keyboard.type("let fired := 1");
   await page.keyboard.press("Enter");
   await page.keyboard.type("end ");
   await expect(

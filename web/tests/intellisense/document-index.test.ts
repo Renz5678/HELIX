@@ -378,6 +378,17 @@ describe("error-tolerant document index", () => {
     bigRuleLines.push("    when sbp.latest > v0 then alert: \"ok\" end when", "end rule");
     const fiveHundredLines = bigRuleLines.join("\n");
 
+    // 1-call V8 JIT warmup on a small scratch input before measuring 500-line cold indexing
+    const warmupLines = [
+      "rule Warmup:",
+      "    bind sbp = Vitals.systolic_bp",
+      "    end bind",
+      ...Array.from({ length: 40 }, (_, i) => `    let w${i} := ${i} + 1`),
+      '    when sbp.latest > w0 then alert: "ok" end when',
+      "end rule",
+    ];
+    indexDocument(warmupLines.join("\n"), schema);
+
     const t0 = performance.now();
     const bigDoc = indexDocument(fiveHundredLines, schema);
     const elapsedMs = performance.now() - t0;

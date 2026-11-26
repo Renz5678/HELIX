@@ -137,7 +137,8 @@ function toTerminologySystem(lexeme: string): TerminologySystem | null {
 
 function sliceCollapsed(source: string, start: number, end: number): string | undefined {
   if (end <= start) return undefined;
-  const trimmed = source.slice(start, end).replace(/\s+/g, " ").trim();
+  const raw = source.slice(start, end);
+  const trimmed = /[\r\n\t]| {2}/.test(raw) ? raw.replace(/\s+/g, " ").trim() : raw.trim();
   if (!trimmed) return undefined;
   return trimmed.length > 160 ? `${trimmed.slice(0, 157)}...` : trimmed;
 }
@@ -298,9 +299,6 @@ function parseTerminologyCall(
 ): { nextIdx: number; occurrence: TerminologyOccurrence } | null {
   const sysTok = tokens[startIdx];
   if (!sysTok || sysTok.kind !== "identifier") return null;
-  const system = toTerminologySystem(sysTok.lexeme);
-  if (!system) return null;
-
   const openTok = tokens[startIdx + 1];
   if (
     !openTok ||
@@ -310,6 +308,8 @@ function parseTerminologyCall(
   ) {
     return null;
   }
+  const system = toTerminologySystem(sysTok.lexeme);
+  if (!system) return null;
 
   const expectedClose = openTok.lexeme === "(" ? ")" : "]";
   let j = startIdx + 2;
@@ -442,6 +442,43 @@ function getDeclOffsets(doc: DocumentIndex, sym: SymbolEntry): { start: number; 
   return { start, end };
 }
 
+const shouldStopLetRhs = (
+  cur: LexToken,
+  collected: readonly LexToken[],
+  depth: number,
+): boolean => {
+  if (depth !== 0) return false;
+  if (cur.kind === "delimiter" && cur.lexeme === ":") return true;
+  if (cur.kind !== "keyword") return false;
+  if (
+    cur.lexeme === "latest" &&
+    collected.length > 0 &&
+    cur.line > collected[collected.length - 1].line
+  ) {
+    const prevExprTok = collected[collected.length - 1];
+    const continuesExpr =
+      (prevExprTok.kind === "delimiter" &&
+        (prevExprTok.lexeme === "." ||
+          prevExprTok.lexeme === "(" ||
+          prevExprTok.lexeme === "[")) ||
+      prevExprTok.kind === "operator" ||
+      (prevExprTok.kind === "keyword" &&
+        (prevExprTok.lexeme === "and" ||
+          prevExprTok.lexeme === "or" ||
+          prevExprTok.lexeme === "not"));
+    return !continuesExpr;
+  }
+  return (
+    cur.lexeme !== "latest" &&
+    cur.lexeme !== "where" &&
+    cur.lexeme !== "within" &&
+    cur.lexeme !== "and" &&
+    cur.lexeme !== "or" &&
+    cur.lexeme !== "not" &&
+    STATEMENT_STOP_KEYWORDS.has(cur.lexeme)
+  );
+};
+
 class DocumentIndexer {
   private readonly tokens: LexToken[];
   private readonly comments: LexComment[];
@@ -563,6 +600,15 @@ class DocumentIndexer {
       this.i++;
     }
 
+    for (const meta of this.blockStack) {
+      const block = this.blocks[meta.blockIndex];
+      for (const idx of meta.ruleScopedSymbols) this.inclusiveScopeSymbols.add(idx);
+      if (block.otherwiseOffset === null) {
+        for (const idx of meta.thenScopedSymbols) this.inclusiveScopeSymbols.add(idx);
+      }
+      for (const idx of meta.otherwiseScopedSymbols) this.inclusiveScopeSymbols.add(idx);
+    }
+
     for (const pending of this.pendingRepeatOfRefs) {
       const resolvedRuleIdx = this.ruleSymbolMap.get(pending.ruleName);
       if (resolvedRuleIdx !== undefined) {
@@ -636,41 +682,38 @@ class DocumentIndexer {
   }
 
   private pushSymbol(
-    entry: Omit<SymbolEntry, "index">,
+    fullEntry: SymbolEntry,
     declEndOffset: number,
     scopeBucket?: number[],
-    registerInScope = true,
+    varScopeMap?: Map<string, number>,
   ): SymbolEntry {
-    const index = this.symbols.length;
-    const fullEntry: SymbolEntry = { index, ...entry };
+    const index = fullEntry.index;
     this.symbols.push(fullEntry);
     this.declEndOffsets.push(declEndOffset);
-    if (fullEntry.scopeEndOffset === this.source.length) {
+    if (!scopeBucket && fullEntry.scopeEndOffset === this.source.length) {
       this.inclusiveScopeSymbols.add(index);
     }
     if (scopeBucket) scopeBucket.push(index);
 
-    if (registerInScope) {
-      if (fullEntry.kind === "rule") {
-        this.ruleSymbolMap.set(fullEntry.name, index);
-      } else {
-        const ruleMeta = this.findEnclosingRuleMeta();
-        const top = this.currentBlockMeta();
-        if (top && this.blocks[top.blockIndex].kind === "when") {
-          const whenBlock = this.blocks[top.blockIndex];
-          if (whenBlock.thenOffset !== null || whenBlock.otherwiseOffset !== null) {
-            top.branchVarScope.set(fullEntry.name, index);
-          } else {
-            top.varScope.set(fullEntry.name, index);
-          }
-        } else if (ruleMeta) {
-          ruleMeta.varScope.set(fullEntry.name, index);
-        } else if (top) {
-          top.varScope.set(fullEntry.name, index);
-        }
-      }
+    if (varScopeMap) {
+      varScopeMap.set(fullEntry.name, index);
+    } else if (fullEntry.kind === "rule") {
+      this.ruleSymbolMap.set(fullEntry.name, index);
     }
     return fullEntry;
+  }
+
+  private resolveVarScopeMap(): Map<string, number> | undefined {
+    const top = this.currentBlockMeta();
+    if (top && this.blocks[top.blockIndex].kind === "when") {
+      const whenBlock = this.blocks[top.blockIndex];
+      return whenBlock.thenOffset !== null || whenBlock.otherwiseOffset !== null
+        ? top.branchVarScope
+        : top.varScope;
+    }
+    const ruleMeta = this.findEnclosingRuleMeta();
+    if (ruleMeta) return ruleMeta.varScope;
+    return top?.varScope;
   }
 
   private finalizeSymbols(
@@ -793,10 +836,10 @@ class DocumentIndexer {
       if (t.kind === "identifier") {
         const nextTok = k + 1 < exprTokens.length ? exprTokens[k + 1] : undefined;
         const isTerm =
-          toTerminologySystem(t.lexeme) !== null &&
           nextTok?.kind === "delimiter" &&
           (nextTok.lexeme === "(" || nextTok.lexeme === "[") &&
-          nextTok.line === t.line;
+          nextTok.line === t.line &&
+          toTerminologySystem(t.lexeme) !== null;
         if (isTerm) {
           this.recordRef(t, null, false);
           const expectedClose = nextTok.lexeme === "(" ? ")" : "]";
@@ -844,19 +887,21 @@ class DocumentIndexer {
         break;
       }
 
-      const term = parseTerminologyCall(
-        this.tokens,
-        this.i,
-        this.source,
-        this.lineStarts,
-      );
-      if (term) {
-        this.terminologyCalls.push(term.occurrence);
-        for (let k = this.i; k < term.nextIdx; k++) {
-          collected.push(this.tokens[k]);
+      if (cur.kind === "identifier") {
+        const term = parseTerminologyCall(
+          this.tokens,
+          this.i,
+          this.source,
+          this.lineStarts,
+        );
+        if (term) {
+          this.terminologyCalls.push(term.occurrence);
+          for (let k = this.i; k < term.nextIdx; k++) {
+            collected.push(this.tokens[k]);
+          }
+          this.i = term.nextIdx;
+          continue;
         }
-        this.i = term.nextIdx;
-        continue;
       }
 
       if (cur.kind === "delimiter" && (cur.lexeme === "(" || cur.lexeme === "[")) depth++;
@@ -905,6 +950,7 @@ class DocumentIndexer {
     if (nameTok) {
       const ruleSym = this.pushSymbol(
         {
+          index: this.symbols.length,
           kind: "rule",
           name: nameTok.lexeme,
           nameRange: tokenRange(nameTok),
@@ -914,8 +960,6 @@ class DocumentIndexer {
           valueType: "Unknown",
         },
         headerEndTok.endOffset,
-        undefined,
-        true,
       );
       this.recordRef(nameTok, ruleSym.index, true);
     }
@@ -1137,6 +1181,7 @@ class DocumentIndexer {
           : undefined;
       const sym = this.pushSymbol(
         {
+          index: this.symbols.length,
           kind: "bind",
           name: nameTok.lexeme,
           nameRange: tokenRange(nameTok),
@@ -1153,7 +1198,7 @@ class DocumentIndexer {
         },
         lastContentTok.endOffset,
         ruleMeta?.ruleScopedSymbols,
-        true,
+        this.resolveVarScopeMap(),
       );
       if (declRefIdx !== -1) this.references[declRefIdx].symbolIndex = sym.index;
     }
@@ -1196,6 +1241,7 @@ class DocumentIndexer {
     if (forVarTok) {
       const forSym = this.pushSymbol(
         {
+          index: this.symbols.length,
           kind: "for",
           name: forVarTok.lexeme,
           nameRange: tokenRange(forVarTok),
@@ -1207,7 +1253,7 @@ class DocumentIndexer {
         },
         forVarTok.endOffset,
         whenMeta.otherwiseScopedSymbols,
-        true,
+        whenMeta.varScope,
       );
       if (forDeclRefIdx !== -1) this.references[forDeclRefIdx].symbolIndex = forSym.index;
     }
@@ -1313,38 +1359,7 @@ class DocumentIndexer {
     ) {
       declEndTok = opTok;
       this.i++;
-      rhsTokens = this.collectExprTokens((cur, collected, depth) => {
-        if (depth !== 0) return false;
-        if (cur.kind === "delimiter" && cur.lexeme === ":") return true;
-        if (cur.kind !== "keyword") return false;
-        if (
-          cur.lexeme === "latest" &&
-          collected.length > 0 &&
-          cur.line > collected[collected.length - 1].line
-        ) {
-          const prevExprTok = collected[collected.length - 1];
-          const continuesExpr =
-            (prevExprTok.kind === "delimiter" &&
-              (prevExprTok.lexeme === "." ||
-                prevExprTok.lexeme === "(" ||
-                prevExprTok.lexeme === "[")) ||
-            prevExprTok.kind === "operator" ||
-            (prevExprTok.kind === "keyword" &&
-              (prevExprTok.lexeme === "and" ||
-                prevExprTok.lexeme === "or" ||
-                prevExprTok.lexeme === "not"));
-          return !continuesExpr;
-        }
-        return (
-          cur.lexeme !== "latest" &&
-          cur.lexeme !== "where" &&
-          cur.lexeme !== "within" &&
-          cur.lexeme !== "and" &&
-          cur.lexeme !== "or" &&
-          cur.lexeme !== "not" &&
-          STATEMENT_STOP_KEYWORDS.has(cur.lexeme)
-        );
-      });
+      rhsTokens = this.collectExprTokens(shouldStopLetRhs);
       if (rhsTokens.length > 0) declEndTok = rhsTokens[rhsTokens.length - 1];
     }
 
@@ -1366,6 +1381,7 @@ class DocumentIndexer {
 
     let scopeStartOffset: number;
     let scopeBucket: number[] | undefined;
+    let varScopeMap: Map<string, number> | undefined;
     if (
       top &&
       topBlock?.kind === "when" &&
@@ -1378,15 +1394,19 @@ class DocumentIndexer {
         scopeStartOffset = topBlock.thenOffset!;
         scopeBucket = top.thenScopedSymbols;
       }
+      varScopeMap = top.branchVarScope;
     } else if (ruleMeta) {
       scopeStartOffset = this.blocks[ruleMeta.blockIndex].openOffset;
       scopeBucket = ruleMeta.ruleScopedSymbols;
+      varScopeMap = ruleMeta.varScope;
     } else {
       scopeStartOffset = tok.startOffset;
+      varScopeMap = top?.varScope;
     }
 
     const letSym = this.pushSymbol(
       {
+        index: this.symbols.length,
         kind: "let",
         name: nameTok.lexeme,
         nameRange: tokenRange(nameTok),
@@ -1398,7 +1418,7 @@ class DocumentIndexer {
       },
       declEndTok.endOffset,
       scopeBucket,
-      true,
+      varScopeMap,
     );
     if (declRefIdx !== -1) this.references[declRefIdx].symbolIndex = letSym.index;
   }
@@ -1466,6 +1486,7 @@ class DocumentIndexer {
 
     const sourceSym = this.pushSymbol(
       {
+        index: this.symbols.length,
         kind: "source",
         name: nameTok.lexeme,
         nameRange: tokenRange(nameTok),
@@ -1479,7 +1500,7 @@ class DocumentIndexer {
       },
       declEndTok.endOffset,
       scopeMeta?.ruleScopedSymbols,
-      true,
+      this.resolveVarScopeMap(),
     );
     if (declRefIdx !== -1) this.references[declRefIdx].symbolIndex = sourceSym.index;
   }
@@ -1512,6 +1533,7 @@ class DocumentIndexer {
       : tok.startOffset;
     const forSym = this.pushSymbol(
       {
+        index: this.symbols.length,
         kind: "for",
         name: varTok.lexeme,
         nameRange: tokenRange(varTok),
@@ -1524,7 +1546,7 @@ class DocumentIndexer {
       },
       declEndTok.endOffset,
       ruleMeta?.ruleScopedSymbols,
-      true,
+      this.resolveVarScopeMap(),
     );
     if (declRefIdx !== -1) this.references[declRefIdx].symbolIndex = forSym.index;
   }

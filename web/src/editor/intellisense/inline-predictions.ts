@@ -445,17 +445,17 @@ export function computeInlinePrediction(
   // 2. member-access on a bound/source series
   if (ctx.kind === "member-access") {
     if (ctx.inBind) return null;
-    const visible = visibleSymbolsAt(doc, offset);
     const chain =
       ctx.memberChain ??
       (ctx.memberOwner ? ctx.memberOwner.split(".") : []);
+    if (chain[chain.length - 1] === "latest") return null;
+    const visible = visibleSymbolsAt(doc, offset);
     const headName = chain[0] ?? ctx.memberOwner ?? "";
-    const ownerSym = visible.find((s) => s.name === headName);
-    if (
-      !ownerSym ||
-      (ownerSym.kind !== "bind" && ownerSym.kind !== "source") ||
-      ownerSym.syntaxOnly
-    ) {
+    const ownerSym = visible.find(
+      (s) =>
+        s.name === headName && (s.kind === "bind" || s.kind === "source"),
+    );
+    if (!ownerSym || ownerSym.syntaxOnly) {
       return null;
     }
 
@@ -530,6 +530,7 @@ export function computeInlinePrediction(
     const col = schema.tablesByName
       .get(ctx.resolvedTableName)
       ?.columns?.find((c) => c.name === ctx.resolvedColumnName);
+    if (col?.type === "Boolean" || typeof first === "boolean") return null;
     const literal =
       col?.type === "String" || typeof first === "string"
         ? JSON.stringify(String(first))
@@ -606,7 +607,7 @@ export function computeInlinePrediction(
     !hasUnclosedGroupingInRange(doc.tokens, innerBlock.openOffset, offset)
   ) {
     const nextLineTrimmed = findNextNonEmptyLineTrimmed(doc, lineIdx);
-    if (!/^end\s+bind\b/.test(nextLineTrimmed)) {
+    if (!/^(?:end\s+bind|where|within)\b/.test(nextLineTrimmed)) {
       return makePrediction(normPos, "end bind");
     }
   }

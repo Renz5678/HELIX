@@ -531,4 +531,115 @@ describe("multi-signal prediction ranker and completion builder", () => {
     );
     expect(Array.isArray(whereZero)).toBe(true);
   });
+
+  it("never emits true/false literals for Boolean tables, marks parser-only duration units syntax-only, prevents duplicate before-now, and avoids .latest.latest", () => {
+    const boolDataset: Dataset = {
+      schemaVersion: 1,
+      evaluationTime: "2026-10-31T12:00:00Z",
+      Bindings: {},
+      tables: [
+        {
+          name: "Flags",
+          patientIdColumn: "patient_id",
+          timestampColumn: "timestamp",
+          defaultValueColumn: "active",
+          columns: [
+            { name: "patient_id", type: "String" },
+            { name: "timestamp", type: "DateTime" },
+            { name: "active", type: "Boolean" },
+          ],
+          rows: [
+            {
+              patient_id: "P1",
+              timestamp: "2026-10-31T11:00:00Z",
+              active: true,
+            },
+            {
+              patient_id: "P2",
+              timestamp: "2026-10-31T11:05:00Z",
+              active: false,
+            },
+          ],
+        },
+      ],
+    };
+
+    const topBool = completeAt("|", boolDataset);
+    const topSnippet = topBool.find((i) => i.isSnippet)?.insertText ?? "";
+    expect(topSnippet).toContain(".latest:");
+    expect(topSnippet).not.toMatch(/\b(?:true|false)\b/);
+    expect(topSnippet).not.toContain("expected_flag");
+
+    const bodyBool = completeAt("rule R:\n    |\nend rule", boolDataset);
+    for (const s of bodyBool.filter((i) => i.isSnippet)) {
+      expect(s.insertText).not.toMatch(/\b(?:true|false)\b/);
+    }
+
+    const whereBool = completeAt(
+      "rule R:\n    bind f = Flags where active == |\nend rule",
+      boolDataset,
+    );
+    expect(whereBool.map((i) => i.label)).not.toContain("true");
+    expect(whereBool.map((i) => i.label)).not.toContain("false");
+
+    const cmpBool = completeAt(
+      "rule R:\n    bind f = Flags\n    end bind\n    when f.latest == |\nend rule",
+      boolDataset,
+    );
+    expect(cmpBool.map((i) => i.label)).not.toContain("true");
+    expect(cmpBool.map((i) => i.label)).not.toContain("false");
+
+    // Duration units C11 parity: only s/m/h/d + singular/plural forms are evaluated
+    const units = completeAt(
+      "rule R:\n    when 1 > 0 within 10 |\nend rule",
+      sepsisDs,
+    );
+    const days = units.find((i) => i.label === "days")!;
+    const minutes = units.find((i) => i.label === "minutes")!;
+    expect(days.syntaxOnly).toBeUndefined();
+    expect(minutes.syntaxOnly).toBeUndefined();
+    for (const parserOnly of [
+      "weeks",
+      "week",
+      "w",
+      "wk",
+      "wks",
+      "min",
+      "mins",
+      "hr",
+      "hrs",
+      "sec",
+      "secs",
+      "months",
+      "years",
+    ]) {
+      const item = units.find((i) => i.label === parserOnly);
+      expect(item).toBeDefined();
+      expect(item?.syntaxOnly).toBe(true);
+      expect(item?.detail).toContain("Syntax-only");
+      expect(item!.sortText > days.sortText).toBe(true);
+      expect(item!.sortText > minutes.sortText).toBe(true);
+    }
+
+    // Prevent duplicate `before before now`
+    const afterBefore = completeAt(
+      "rule R:\n    when 1 > 0 within 30 minutes before |\nend rule",
+      sepsisDs,
+    );
+    expect(afterBefore.map((i) => i.label)).toContain("now");
+    expect(afterBefore.map((i) => i.label)).not.toContain("before now");
+
+    // Prevent `.latest.` suggesting `.latest` again
+    const afterLatestBind = completeAt(
+      "rule R:\n    bind sbp = Vitals.systolic_bp\n    end bind\n    when sbp.latest.|\nend rule",
+      sepsisDs,
+    );
+    expect(afterLatestBind.map((i) => i.label)).not.toContain("latest");
+
+    const afterLatestCol = completeAt(
+      "rule R:\n    source Vitals\n    when Vitals.systolic_bp.latest.|\nend rule",
+      sepsisDs,
+    );
+    expect(afterLatestCol.map((i) => i.label)).not.toContain("latest");
+  });
 });

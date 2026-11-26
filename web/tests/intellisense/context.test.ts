@@ -604,5 +604,32 @@ describe("grammar-state cursor context classifier", () => {
       resolvedColumnName: "value",
       expectedType: "Number",
     });
+
+    // Item 4: withinHasBefore distinguishes `within <num> <unit> |` vs `within <num> <unit> before |`
+    expect(
+      ctxAt("rule R:\n    when 1 > 0 within 30 minutes before |\nend rule", sepsis),
+    ).toMatchObject({
+      kind: "within-post",
+      withinNumber: 30,
+      withinHasBefore: true,
+    });
+    expect(
+      ctxAt("rule R:\n    when 1 > 0 within 30 minutes |\nend rule", sepsis)
+        .withinHasBefore,
+    ).toBeFalsy();
+
+    // Item 7: alert-severity-string is restricted to argIndex === 1 || hasLevelPrefix
+    expect(
+      ctxAt(
+        'rule R:\n    when 1 > 0:\n    then:\n        alert: "Msg", "WARNING", "extra|\n    end when\nend rule',
+        sepsis,
+      ).kind,
+    ).toBe("string-literal");
+    expect(
+      ctxAt(
+        'rule R:\n    when 1 > 0:\n    then:\n        alert: level: "W|\n    end when\nend rule',
+        sepsis,
+      ).kind,
+    ).toBe("alert-severity-string");
   });
 });

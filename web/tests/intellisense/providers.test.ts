@@ -140,6 +140,24 @@ describe("IDE providers (hover, signature, nav, outline, quick fixes)", () => {
       offsetToPosition(bindSameNameSrc, bindSameNameSrc.indexOf("status =") + 1),
     );
     expect(bindLhsHover?.markdown).toContain("**bind** `status`");
+
+    const withinSrc =
+      'rule W:\n    when 1 > 0 within 30 minutes:\n    then:\n        alert: "ok"\n    end when\nend rule';
+    const withinHover = engine.provideHover(
+      "file:///within.helix",
+      1,
+      withinSrc,
+      sepsisDs,
+      offsetToPosition(withinSrc, withinSrc.indexOf("within") + 2),
+    );
+    expect(withinHover?.markdown).toContain("seconds");
+    expect(withinHover?.markdown).toContain("minutes");
+    expect(withinHover?.markdown).toContain("hours");
+    expect(withinHover?.markdown).toContain("days");
+    expect(withinHover?.markdown).toContain("weeks");
+    expect(withinHover?.markdown).toContain("months");
+    expect(withinHover?.markdown).toContain("years");
+    expect(withinHover?.markdown.toLowerCase()).toContain("parser-only");
   });
 
   it("computes active signature parameter for alert and terminology calls", () => {

@@ -42,28 +42,28 @@ export const EXECUTOR_TIME_UNITS: readonly string[] = [
   "hours",
   "days",
   "seconds",
-  "weeks",
   "m",
   "h",
   "d",
   "s",
-  "w",
   "minute",
   "hour",
   "day",
   "second",
+];
+
+export const PARSER_ONLY_TIME_UNITS: readonly string[] = [
+  "weeks",
   "week",
+  "w",
+  "wk",
+  "wks",
   "min",
   "mins",
   "hr",
   "hrs",
   "sec",
   "secs",
-  "wk",
-  "wks",
-];
-
-export const PARSER_ONLY_TIME_UNITS: readonly string[] = [
   "months",
   "month",
   "years",

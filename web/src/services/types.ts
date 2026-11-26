@@ -108,4 +108,6 @@ export interface Workspace {
   dataset: Dataset;
   autoAnalyze: boolean;
   fontSize: number;
+  inlinePredictions?: boolean;
+  autoSuggest?: boolean;
 }

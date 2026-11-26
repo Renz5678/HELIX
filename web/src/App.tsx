@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
+import "monaco-editor/esm/vs/editor/edcore.main.js";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import {
   Dna,
@@ -33,7 +34,9 @@ import {
   download,
 } from "./services/data";
 import { byteOffsetToPosition } from "./services/positions";
-import { register } from "./editor/language";
+import { registerHelixLanguage } from "./editor/language";
+import { HelixIntelliSense } from "./editor/intellisense/engine";
+import type { HelixLanguageHost } from "./editor/intellisense/types";
 import type {
   Analysis,
   Dataset,
@@ -55,13 +58,98 @@ const tabs = [
   "Grammar",
 ] as const;
 type Tab = (typeof tabs)[number];
+
+interface DiagnosticEntry {
+  d: Diagnostic;
+  source: string;
+}
+
+function combineDiagnosticEntries(
+  analysis: Analysis | null,
+  analysisSource: string,
+  semanticDiagnostics: Diagnostic[],
+  semanticSource: string,
+  evaluation: Evaluation | null,
+  evalSource: string,
+  useEvaluation: boolean,
+): DiagnosticEntry[] {
+  const analysisEntries: DiagnosticEntry[] = (analysis?.diagnostics ?? []).map(
+    (d) => ({ d, source: analysisSource }),
+  );
+  const analysisMessages = new Set(analysisEntries.map((e) => e.d.message));
+  const semanticEntries: DiagnosticEntry[] =
+    useEvaluation && evaluation
+      ? evaluation.diagnostics
+          .filter(
+            (d) =>
+              !(
+                d.code === "ANALYSIS_ERROR" &&
+                analysis &&
+                !analysis.success &&
+                analysisMessages.has(d.message)
+              ),
+          )
+          .map((d) => ({ d, source: evalSource }))
+      : semanticDiagnostics.map((d) => ({ d, source: semanticSource }));
+
+  const seen = new Set<string>();
+  const out: DiagnosticEntry[] = [];
+  for (const entry of [...analysisEntries, ...semanticEntries]) {
+    const key = `${entry.d.code}:${entry.d.startOffset ?? ""}:${entry.d.endOffset ?? ""}:${entry.d.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
+function applyModelMarkers(
+  model: monaco.editor.ITextModel,
+  entries: DiagnosticEntry[],
+) {
+  monaco.editor.setModelMarkers(
+    model,
+    "helix",
+    entries
+      .filter(({ d }) => d.startOffset !== undefined)
+      .map(({ d, source }) => {
+        const start = byteOffsetToPosition(source, d.startOffset!),
+          end = byteOffsetToPosition(
+            source,
+            d.endOffset ?? d.startOffset! + 1,
+          );
+        return {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: end.lineNumber,
+          endColumn: Math.max(
+            end.column,
+            start.lineNumber === end.lineNumber ? start.column + 1 : 1,
+          ),
+          severity:
+            d.severity === "error"
+              ? monaco.MarkerSeverity.Error
+              : d.severity === "warning"
+                ? monaco.MarkerSeverity.Warning
+                : monaco.MarkerSeverity.Info,
+          message: d.message,
+          code: d.code,
+        };
+      }),
+  );
+}
+
 export default function App() {
   const [workspace, setWorkspace] = useState(initial.workspace),
     [storageWarning, setStorageWarning] = useState(initial.warning ?? "");
   const [state, setState] = useState("Loading engine"),
     [engineError, setEngineError] = useState(""),
     [analysis, setAnalysis] = useState<Analysis | null>(null),
+    [analysisSource, setAnalysisSource] = useState(""),
+    [semanticDiagnostics, setSemanticDiagnostics] = useState<Diagnostic[]>([]),
+    [semanticSource, setSemanticSource] = useState(""),
     [evaluation, setEvaluation] = useState<Evaluation | null>(null),
+    [evalSource, setEvalSource] = useState(""),
     [tab, setTab] = useState<Tab>("Problems"),
     [settings, setSettings] = useState(false),
     [showData, setShowData] = useState(true),
@@ -77,22 +165,46 @@ export default function App() {
     editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
     completion = useRef<monaco.IDisposable | null>(null),
     cursorListener = useRef<monaco.IDisposable | null>(null),
+    intellisense = useRef(new HelixIntelliSense()),
     revision = useRef(0),
     analysisId = useRef(0),
+    validateId = useRef(0),
     baseline = useRef(workspace.source),
     fileInput = useRef<HTMLInputElement>(null),
-    current = useRef(workspace);
+    current = useRef(workspace),
+    draftErrorsRef = useRef(draftErrors);
   current.current = workspace;
+  draftErrorsRef.current = draftErrors;
   const dataErrors = validateDataset(workspace.dataset),
     errors = [...dataErrors, ...Object.values(draftErrors)];
-  const diagnostics: Diagnostic[] = [
-    ...(analysis?.diagnostics ?? []),
-    ...(evaluation && evalRevision === revision.current
-      ? evaluation.diagnostics
-      : []),
-  ];
+  const diagnosticEntries = combineDiagnosticEntries(
+    analysis,
+    analysisSource,
+    semanticDiagnostics,
+    semanticSource,
+    evaluation,
+    evalSource,
+    evaluation !== null && evalRevision === revision.current,
+  );
+  const diagnostics: Diagnostic[] = diagnosticEntries.map((entry) => entry.d);
+  const diagnosticsRef = useRef(diagnostics);
+  diagnosticsRef.current = diagnostics;
+  const latestDiagnosticEntriesRef = useRef(diagnosticEntries);
+  latestDiagnosticEntriesRef.current = diagnosticEntries;
   const dirty = workspace.source !== baseline.current,
     stale = evaluation !== null && evalRevision !== revision.current;
+  const model = editor.current?.getModel();
+  const activeRule = useMemo(
+    () =>
+      intellisense.current.getActiveRuleName(
+        model ? model.uri.toString() : "helix://studio/editor",
+        model ? model.getVersionId() : revision.current,
+        workspace.source,
+        workspace.dataset,
+        cursor,
+      ),
+    [model, workspace.source, workspace.dataset, cursor],
+  );
   function log(message: string) {
     setLogs((old) =>
       [`${new Date().toLocaleTimeString()}  ${message}`, ...old].slice(0, 100),
@@ -143,6 +255,44 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
+  const validate = useCallback(
+    async (sourceSnapshot?: string) => {
+      if (!engine.current || !ready) return;
+      const source = sourceSnapshot ?? current.current.source;
+      const dataset = current.current.dataset;
+      if (
+        validateDataset(dataset).length > 0 ||
+        Object.keys(draftErrorsRef.current).length > 0
+      ) {
+        return;
+      }
+      const id = ++validateId.current;
+      try {
+        const result = await engine.current.request(
+          "validate",
+          source,
+          structuredClone(dataset),
+        );
+        if (
+          id !== validateId.current ||
+          source !== current.current.source ||
+          dataset !== current.current.dataset
+        ) {
+          return;
+        }
+        setSemanticDiagnostics(
+          result.diagnostics.filter((d) => d.severity !== "info"),
+        );
+        setSemanticSource(source);
+      } catch (e) {
+        if (String(e).includes("Superseded") || id !== validateId.current)
+          return;
+        setState("Engine Error");
+        setEngineError(String(e));
+      }
+    },
+    [ready],
+  );
   const analyze = useCallback(async () => {
     if (!engine.current || !ready) return;
     const id = ++analysisId.current,
@@ -154,64 +304,91 @@ export default function App() {
       if (id !== analysisId.current || source !== current.current.source)
         return;
       setAnalysis(result);
+      setAnalysisSource(source);
       setState(result.success ? "Valid" : "Invalid");
       log(
         `Analysis ${result.success ? "passed" : "failed"} · ${result.tokenCount} tokens · ${(performance.now() - start).toFixed(1)} ms`,
       );
+      if (
+        result.success &&
+        validateDataset(current.current.dataset).length === 0 &&
+        Object.keys(draftErrorsRef.current).length === 0
+      ) {
+        void validate(source);
+      } else {
+        validateId.current++;
+        setSemanticDiagnostics([]);
+        setSemanticSource("");
+      }
     } catch (e) {
       if (String(e).includes("Superseded") || id !== analysisId.current) return;
       setState("Engine Error");
       setEngineError(String(e));
     }
-  }, [ready]);
+  }, [ready, validate]);
   useEffect(() => {
     if (workspace.autoAnalyze && ready) {
-      const timer = setTimeout(() => void analyze(), 350);
+      const timer = setTimeout(() => void analyze(), 180);
       return () => clearTimeout(timer);
     }
   }, [workspace.source, workspace.autoAnalyze, ready, analyze]);
   useEffect(() => {
-    const model = editor.current?.getModel();
-    if (!model) return;
-    monaco.editor.setModelMarkers(
-      model,
-      "helix",
-      diagnostics
-        .filter((d) => d.startOffset !== undefined)
-        .map((d) => {
-          const start = byteOffsetToPosition(workspace.source, d.startOffset!),
-            end = byteOffsetToPosition(
-              workspace.source,
-              d.endOffset ?? d.startOffset! + 1,
-            );
-          return {
-            startLineNumber: start.lineNumber,
-            startColumn: start.column,
-            endLineNumber: end.lineNumber,
-            endColumn: Math.max(
-              end.column,
-              start.lineNumber === end.lineNumber ? start.column + 1 : 1,
-            ),
-            severity:
-              d.severity === "error"
-                ? monaco.MarkerSeverity.Error
-                : monaco.MarkerSeverity.Warning,
-            message: d.message,
-            code: d.code,
-          };
-        }),
+    if (
+      workspace.autoAnalyze &&
+      ready &&
+      analysis?.success &&
+      errors.length === 0
+    ) {
+      const timer = setTimeout(() => void validate(), 180);
+      return () => clearTimeout(timer);
+    }
+  }, [
+    workspace.dataset,
+    workspace.autoAnalyze,
+    ready,
+    analysis?.success,
+    errors.length,
+    validate,
+  ]);
+  useEffect(() => {
+    const editorModel = editor.current?.getModel();
+    if (!editorModel) return;
+    const combined = combineDiagnosticEntries(
+      analysis,
+      analysisSource,
+      semanticDiagnostics,
+      semanticSource,
+      evaluation,
+      evalSource,
+      evaluation !== null && evalRevision === revision.current,
     );
-  }, [analysis, evaluation, workspace.source, evalRevision]);
+    applyModelMarkers(editorModel, combined);
+  }, [
+    analysis,
+    analysisSource,
+    semanticDiagnostics,
+    semanticSource,
+    evaluation,
+    evalSource,
+    evalRevision,
+  ]);
   function sourceChanged(source: string) {
     revision.current++;
     analysisId.current++;
-    setAnalysis(null);
+    validateId.current++;
+    if (!current.current.autoAnalyze) {
+      setAnalysis(null);
+      setAnalysisSource("");
+      setSemanticDiagnostics([]);
+      setSemanticSource("");
+    }
     setWorkspace((w) => ({ ...w, source }));
     setState(ready ? "Ready" : state);
   }
   function setDataset(dataset: Dataset) {
     revision.current++;
-    if(ready)setState("Ready");
+    validateId.current++;
+    if (ready) setState("Ready");
     setWorkspace((w) => ({ ...w, dataset }));
   }
   const setDraftError = useCallback(
@@ -221,6 +398,7 @@ export default function App() {
         const next = { ...old };
         if (error) next[id] = error;
         else delete next[id];
+        draftErrorsRef.current = next;
         return next;
       }),
     [],
@@ -235,8 +413,12 @@ export default function App() {
     const start = performance.now();
     try {
       const result = await engine.current.request("evaluate", source, data);
-      if (rev !== revision.current) {setState(ready?"Ready":"Loading engine");return;}
+      if (rev !== revision.current) {
+        setState(ready ? "Ready" : "Loading engine");
+        return;
+      }
       setEvaluation(result);
+      setEvalSource(source);
       setEvalRevision(rev);
       setState(result.success ? "Valid" : "Invalid");
       log(
@@ -247,13 +429,18 @@ export default function App() {
       setEngineError(String(e));
     }
   }
-  function navigate(d: Diagnostic) {
+  function navigate(d: Diagnostic, snapshotSource = workspace.source) {
     if (d.startOffset === undefined) {
       setShowData(true);
-      if(d.tableName&&d.rowIndex!==undefined&&d.columnName)setDataFocus({tableName:d.tableName,rowIndex:d.rowIndex,columnName:d.columnName});
+      if (d.tableName && d.rowIndex !== undefined && d.columnName)
+        setDataFocus({
+          tableName: d.tableName,
+          rowIndex: d.rowIndex,
+          columnName: d.columnName,
+        });
       return;
     }
-    const position = byteOffsetToPosition(workspace.source, d.startOffset);
+    const position = byteOffsetToPosition(snapshotSource, d.startOffset);
     editor.current?.setPosition(position);
     editor.current?.revealPositionInCenter(position);
     editor.current?.focus();
@@ -266,7 +453,9 @@ export default function App() {
     if (dirty && !confirm("Discard unsaved source changes?")) return;
     revision.current++;
     analysisId.current++;
+    validateId.current++;
     baseline.current = source;
+    draftErrorsRef.current = {};
     setWorkspace((w) => ({
       ...w,
       source,
@@ -274,9 +463,16 @@ export default function App() {
       dataset: structuredClone(dataset),
     }));
     setAnalysis(null);
+    setAnalysisSource("");
+    setSemanticDiagnostics([]);
+    setSemanticSource("");
     setEvaluation(null);
+    setEvalSource("");
+    setEvalRevision(-1);
     setDraftErrors({});
-    if(window.innerWidth<=900)setShowSidebar(false);
+    const editorModel = editor.current?.getModel();
+    if (editorModel) monaco.editor.setModelMarkers(editorModel, "helix", []);
+    if (window.innerWidth <= 900) setShowSidebar(false);
     setTab("Problems");
     log(`Opened ${filename}`);
   }
@@ -383,7 +579,33 @@ export default function App() {
                   setWorkspace((w) => ({ ...w, autoAnalyze: e.target.checked }))
                 }
               />
-              Automatic analysis · 350 ms
+              Automatic analysis · 180 ms
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={workspace.inlinePredictions ?? true}
+                onChange={(e) =>
+                  setWorkspace((w) => ({
+                    ...w,
+                    inlinePredictions: e.target.checked,
+                  }))
+                }
+              />
+              Inline predictions (ghost text)
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={workspace.autoSuggest ?? true}
+                onChange={(e) =>
+                  setWorkspace((w) => ({
+                    ...w,
+                    autoSuggest: e.target.checked,
+                  }))
+                }
+              />
+              Auto-trigger suggestions
             </label>
             <label>
               Font size{" "}
@@ -526,6 +748,12 @@ export default function App() {
             HELIX <ChevronRight size={11} />
             Rules <ChevronRight size={11} />
             <span>{workspace.filename.replace(".helix", "")}</span>
+            {activeRule && (
+              <>
+                <ChevronRight size={11} />
+                <span className="breadcrumb-rule">{activeRule}</span>
+              </>
+            )}
             <span className="language-tag">.helix</span>
           </div>
           <div className="code-editor">
@@ -535,15 +763,35 @@ export default function App() {
               value={workspace.source}
               beforeMount={(m) => {
                 completion.current?.dispose();
-                completion.current = register(m, () =>
-                  current.current.dataset.tables.map((t) => t.name),
+                const host: HelixLanguageHost = {
+                  getDataset: () => current.current.dataset,
+                  getSettings: () => ({
+                    inlinePredictions:
+                      current.current.inlinePredictions ?? true,
+                    autoSuggest: current.current.autoSuggest ?? true,
+                  }),
+                  getFilename: () => current.current.filename,
+                  getDiagnostics: () => diagnosticsRef.current,
+                };
+                completion.current = registerHelixLanguage(
+                  m,
+                  host,
+                  intellisense.current,
                 );
               }}
               onMount={(e) => {
                 editor.current = e;
+                cursorListener.current?.dispose();
                 cursorListener.current = e.onDidChangeCursorPosition((event) =>
                   setCursor(event.position),
                 );
+                const mountedModel = e.getModel();
+                if (mountedModel) {
+                  applyModelMarkers(
+                    mountedModel,
+                    latestDiagnosticEntriesRef.current,
+                  );
+                }
               }}
               onChange={(value) => {
                 if (value !== undefined && value !== workspace.source)
@@ -561,6 +809,17 @@ export default function App() {
                 renderLineHighlight: "line",
                 tabSize: 4,
                 overviewRulerBorder: false,
+                inlineSuggest: { enabled: workspace.inlinePredictions ?? true },
+                quickSuggestions:
+                  (workspace.autoSuggest ?? true)
+                    ? { other: "on", comments: "off", strings: "on" }
+                    : false,
+                suggestOnTriggerCharacters: workspace.autoSuggest ?? true,
+                parameterHints: { enabled: true },
+                lightbulb: {
+                  enabled: monaco.editor.ShowLightbulbIconMode.On,
+                },
+                suggest: { preview: true, showStatusBar: true },
               }}
               loading={<div className="empty-state">Loading editor…</div>}
             />
@@ -605,13 +864,13 @@ export default function App() {
             </div>
             <div className="panel-content" id="inspection-panel" role="tabpanel" aria-labelledby={`tab-${tab.replaceAll(' ','-')}`}>
               {tab === "Problems" &&
-                (diagnostics.length ? (
+                (diagnosticEntries.length ? (
                   <div className="problem-list">
-                    {diagnostics.map((d, i) => (
+                    {diagnosticEntries.map(({ d, source }, i) => (
                       <button
                         key={i}
                         className="problem-row"
-                        onClick={() => navigate(d)}
+                        onClick={() => navigate(d, source)}
                       >
                         <AlertCircle size={14} />
                         <span className="small-tag">{d.category}</span>
@@ -671,13 +930,16 @@ export default function App() {
                             <tr
                               key={t.index}
                               onClick={() =>
-                                navigate({
-                                  severity: "info",
-                                  category: "token",
-                                  code: t.type,
-                                  message: t.lexeme,
-                                  startOffset: t.startOffset,
-                                })
+                                navigate(
+                                  {
+                                    severity: "info",
+                                    category: "token",
+                                    code: t.type,
+                                    message: t.lexeme,
+                                    startOffset: t.startOffset,
+                                  },
+                                  analysisSource,
+                                )
                               }
                             >
                               <td>{t.index}</td>
@@ -722,7 +984,7 @@ export default function App() {
                         <button
                           key={i}
                           className="problem-row"
-                          onClick={() => navigate(d)}
+                          onClick={() => navigate(d, evalSource)}
                         >
                           <AlertCircle size={14} />
                           {d.message}
@@ -756,13 +1018,16 @@ export default function App() {
                               <button
                                 className="condition-text"
                                 onClick={() =>
-                                  navigate({
-                                    severity: "info",
-                                    category: "condition",
-                                    code: c.conditionId,
-                                    message: c.conditionText,
-                                    startOffset: c.startOffset,
-                                  })
+                                  navigate(
+                                    {
+                                      severity: "info",
+                                      category: "condition",
+                                      code: c.conditionId,
+                                      message: c.conditionText,
+                                      startOffset: c.startOffset,
+                                    },
+                                    evalSource,
+                                  )
                                 }
                               >
                                 {c.conditionText}

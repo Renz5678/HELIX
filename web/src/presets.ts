@@ -55,4 +55,6 @@ export const defaultWorkspace: Workspace = {
   dataset: structuredClone(dataset),
   autoAnalyze: true,
   fontSize: 14,
+  inlinePredictions: true,
+  autoSuggest: true,
 };

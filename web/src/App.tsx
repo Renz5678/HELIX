@@ -34,6 +34,13 @@ import {
   download,
 } from "./services/data";
 import { byteOffsetToPosition } from "./services/positions";
+import {
+  combineDiagnosticEntries,
+  getDatasetEditDiagnosticPatch,
+  isEvaluationStale,
+  resolveMarkerSync,
+  type DiagnosticEntry,
+} from "./services/diagnostics";
 import { registerHelixLanguage } from "./editor/language";
 import { HelixIntelliSense } from "./editor/intellisense/engine";
 import type { HelixLanguageHost } from "./editor/intellisense/types";
@@ -58,50 +65,6 @@ const tabs = [
   "Grammar",
 ] as const;
 type Tab = (typeof tabs)[number];
-
-interface DiagnosticEntry {
-  d: Diagnostic;
-  source: string;
-}
-
-function combineDiagnosticEntries(
-  analysis: Analysis | null,
-  analysisSource: string,
-  semanticDiagnostics: Diagnostic[],
-  semanticSource: string,
-  evaluation: Evaluation | null,
-  evalSource: string,
-  useEvaluation: boolean,
-): DiagnosticEntry[] {
-  const analysisEntries: DiagnosticEntry[] = (analysis?.diagnostics ?? []).map(
-    (d) => ({ d, source: analysisSource }),
-  );
-  const analysisMessages = new Set(analysisEntries.map((e) => e.d.message));
-  const semanticEntries: DiagnosticEntry[] =
-    useEvaluation && evaluation
-      ? evaluation.diagnostics
-          .filter(
-            (d) =>
-              !(
-                d.code === "ANALYSIS_ERROR" &&
-                analysis &&
-                !analysis.success &&
-                analysisMessages.has(d.message)
-              ),
-          )
-          .map((d) => ({ d, source: evalSource }))
-      : semanticDiagnostics.map((d) => ({ d, source: semanticSource }));
-
-  const seen = new Set<string>();
-  const out: DiagnosticEntry[] = [];
-  for (const entry of [...analysisEntries, ...semanticEntries]) {
-    const key = `${entry.d.code}:${entry.d.startOffset ?? ""}:${entry.d.endOffset ?? ""}:${entry.d.message}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(entry);
-  }
-  return out;
-}
 
 function applyModelMarkers(
   model: monaco.editor.ITextModel,
@@ -172,9 +135,11 @@ export default function App() {
     baseline = useRef(workspace.source),
     fileInput = useRef<HTMLInputElement>(null),
     current = useRef(workspace),
-    draftErrorsRef = useRef(draftErrors);
+    draftErrorsRef = useRef(draftErrors),
+    semanticSourceRef = useRef(semanticSource);
   current.current = workspace;
   draftErrorsRef.current = draftErrors;
+  semanticSourceRef.current = semanticSource;
   const dataErrors = validateDataset(workspace.dataset),
     errors = [...dataErrors, ...Object.values(draftErrors)];
   const diagnosticEntries = combineDiagnosticEntries(
@@ -192,7 +157,7 @@ export default function App() {
   const latestDiagnosticEntriesRef = useRef(diagnosticEntries);
   latestDiagnosticEntriesRef.current = diagnosticEntries;
   const dirty = workspace.source !== baseline.current,
-    stale = evaluation !== null && evalRevision !== revision.current;
+    stale = isEvaluationStale(evaluation, evalRevision, revision.current);
   const model = editor.current?.getModel();
   const activeRule = useMemo(
     () =>
@@ -264,6 +229,10 @@ export default function App() {
         validateDataset(dataset).length > 0 ||
         Object.keys(draftErrorsRef.current).length > 0
       ) {
+        if (semanticSourceRef.current !== source) {
+          setSemanticDiagnostics([]);
+          setSemanticSource("");
+        }
         return;
       }
       const id = ++validateId.current;
@@ -287,6 +256,8 @@ export default function App() {
       } catch (e) {
         if (String(e).includes("Superseded") || id !== validateId.current)
           return;
+        setSemanticDiagnostics([]);
+        setSemanticSource("");
         setState("Engine Error");
         setEngineError(String(e));
       }
@@ -353,16 +324,22 @@ export default function App() {
   useEffect(() => {
     const editorModel = editor.current?.getModel();
     if (!editorModel) return;
-    const combined = combineDiagnosticEntries(
+    const sync = resolveMarkerSync({
       analysis,
       analysisSource,
       semanticDiagnostics,
       semanticSource,
       evaluation,
       evalSource,
-      evaluation !== null && evalRevision === revision.current,
-    );
-    applyModelMarkers(editorModel, combined);
+      evalRevision,
+      revision: revision.current,
+      canValidate:
+        validateDataset(current.current.dataset).length === 0 &&
+        Object.keys(draftErrorsRef.current).length === 0,
+    });
+    if (sync.apply) {
+      applyModelMarkers(editorModel, sync.entries);
+    }
   }, [
     analysis,
     analysisSource,
@@ -381,6 +358,7 @@ export default function App() {
       setAnalysisSource("");
       setSemanticDiagnostics([]);
       setSemanticSource("");
+      setEvalRevision(-1);
     }
     setWorkspace((w) => ({ ...w, source }));
     setState(ready ? "Ready" : state);
@@ -388,6 +366,12 @@ export default function App() {
   function setDataset(dataset: Dataset) {
     revision.current++;
     validateId.current++;
+    const patch = getDatasetEditDiagnosticPatch(current.current.autoAnalyze);
+    setEvalRevision(patch.evalRevision);
+    if (patch.clearSemantic || validateDataset(dataset).length > 0) {
+      setSemanticDiagnostics([]);
+      setSemanticSource("");
+    }
     if (ready) setState("Ready");
     setWorkspace((w) => ({ ...w, dataset }));
   }

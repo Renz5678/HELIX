@@ -68,3 +68,53 @@ it("rejects malformed imported table structures before rendering", () => {
     } as never).length,
   ).toBeGreaterThan(0);
 });
+
+describe("workspace IntelliSense settings compatibility", () => {
+  it("loads legacy v1 workspaces without IntelliSense flags and defaults both to true", () => {
+    const legacy = {
+      version: 1,
+      source: defaultWorkspace.source,
+      filename: defaultWorkspace.filename,
+      dataset: defaultWorkspace.dataset,
+      autoAnalyze: true,
+      fontSize: 14,
+    };
+    const store = { getItem: () => JSON.stringify(legacy), setItem: () => {} };
+    const loaded = loadWorkspace(store);
+    expect(loaded.warning).toBeUndefined();
+    expect(loaded.workspace.inlinePredictions).toBe(true);
+    expect(loaded.workspace.autoSuggest).toBe(true);
+  });
+
+  it("recovers cleanly when stored IntelliSense flags have non-boolean types", () => {
+    const corrupt = { ...defaultWorkspace, inlinePredictions: "yes" };
+    const store = { getItem: () => JSON.stringify(corrupt), setItem: () => {} };
+    const loaded = loadWorkspace(store);
+    expect(loaded.warning).toBeTruthy();
+    expect(loaded.workspace.inlinePredictions).toBe(true);
+    expect(loaded.workspace.autoSuggest).toBe(true);
+  });
+
+  it("rejects corrupt autoSuggest values and preserves explicit false flags", () => {
+    const corruptAutoSuggest = { ...defaultWorkspace, autoSuggest: 1 };
+    const loadedCorrupt = loadWorkspace({
+      getItem: () => JSON.stringify(corruptAutoSuggest),
+      setItem: () => {},
+    });
+    expect(loadedCorrupt.warning).toBeTruthy();
+    expect(loadedCorrupt.workspace.autoSuggest).toBe(true);
+
+    const disabled = {
+      ...defaultWorkspace,
+      inlinePredictions: false,
+      autoSuggest: false,
+    };
+    const loadedDisabled = loadWorkspace({
+      getItem: () => JSON.stringify(disabled),
+      setItem: () => {},
+    });
+    expect(loadedDisabled.warning).toBeUndefined();
+    expect(loadedDisabled.workspace.inlinePredictions).toBe(false);
+    expect(loadedDisabled.workspace.autoSuggest).toBe(false);
+  });
+});

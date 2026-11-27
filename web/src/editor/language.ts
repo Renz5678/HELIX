@@ -1,43 +1,141 @@
-import type * as Monaco from "monaco-editor";
-export const keywords = [
-  "rule",
-  "intent",
-  "bind",
-  "site",
-  "source",
-  "terminology",
-  "schedule",
-  "when",
-  "for",
-  "let",
-  "latest",
-  "where",
-  "and",
-  "or",
-  "not",
-  "within",
-  "then",
-  "alert",
-  "suppress",
-  "otherwise",
-  "end",
-];
-const docs: Record<string, string> = {
-  rule: "Declare a named rule terminated by end rule",
-  bind: "Map a series to a table column, optionally filtered by where and within, terminated by end bind",
-  source: "Select a local table or describe source-system metadata",
-  when: "Run then for TRUE, otherwise for FALSE, terminated by end when; UNKNOWN executes neither",
-  latest:
-    "Select the latest eligible patient reading using the evaluation timestamp",
-  within: "Restrict readings to an inclusive time window",
-  suppress:
-    "Record a simulated suppression request; no state persists between runs",
-};
-export function register(monaco: typeof Monaco, getTables: () => string[]) {
-  if (!monaco.languages.getLanguages().some((l) => l.id === "helix"))
+import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
+import type { CompletionKind } from "./intellisense/completions";
+import { HelixIntelliSense } from "./intellisense/engine";
+import type { MarkerInput, OutlineSymbol, OutlineSymbolKind } from "./intellisense/providers";
+import {
+  HELIX_KEYWORDS,
+  type HelixLanguageHost,
+  type TextRange,
+} from "./intellisense/types";
+
+export { HELIX_KEYWORDS as keywords };
+
+function mapCompletionKind(
+  monaco: typeof Monaco,
+  kind: CompletionKind,
+): Monaco.languages.CompletionItemKind {
+  const kinds = monaco.languages.CompletionItemKind;
+  switch (kind) {
+    case "keyword":
+      return kinds.Keyword;
+    case "variable":
+      return kinds.Variable;
+    case "field":
+      return kinds.Field;
+    case "property":
+      return kinds.Property;
+    case "class":
+      return kinds.Class;
+    case "value":
+      return kinds.Value;
+    case "enumMember":
+      return kinds.EnumMember;
+    case "unit":
+      return kinds.Unit;
+    case "snippet":
+      return kinds.Snippet;
+    case "module":
+      return kinds.Module;
+    case "constant":
+      return kinds.Constant;
+    case "operator":
+      return kinds.Operator;
+  }
+}
+
+function mapSymbolKind(
+  monaco: typeof Monaco,
+  kind: OutlineSymbolKind,
+): Monaco.languages.SymbolKind {
+  const kinds = monaco.languages.SymbolKind;
+  switch (kind) {
+    case "rule":
+      return kinds.Class;
+    case "source":
+      return kinds.Module;
+    case "bind":
+      return kinds.Property;
+    case "let":
+      return kinds.Variable;
+    case "when":
+      return kinds.Boolean;
+    case "alert":
+    case "suppress":
+      return kinds.Event;
+  }
+}
+
+function toMonacoDocumentSymbol(
+  monaco: typeof Monaco,
+  sym: OutlineSymbol,
+): Monaco.languages.DocumentSymbol {
+  return {
+    name: sym.name,
+    detail: sym.detail,
+    kind: mapSymbolKind(monaco, sym.kind),
+    tags: [],
+    range: sym.range,
+    selectionRange: sym.selectionRange,
+    children: sym.children.map((child) =>
+      toMonacoDocumentSymbol(monaco, child),
+    ),
+  };
+}
+
+function comparePos(
+  aLine: number,
+  aCol: number,
+  bLine: number,
+  bCol: number,
+): number {
+  if (aLine !== bLine) return aLine - bLine;
+  return aCol - bCol;
+}
+
+function rangesOverlap(a: TextRange, b: TextRange): boolean {
+  return (
+    comparePos(a.endLineNumber, a.endColumn, b.startLineNumber, b.startColumn) >=
+      0 &&
+    comparePos(b.endLineNumber, b.endColumn, a.startLineNumber, a.startColumn) >=
+      0
+  );
+}
+
+function markerToInput(m: Monaco.editor.IMarker): MarkerInput {
+  const code =
+    typeof m.code === "string"
+      ? m.code
+      : m.code && typeof m.code === "object" && "value" in m.code
+        ? m.code.value
+        : undefined;
+  return {
+    code,
+    message: m.message,
+    range: {
+      startLineNumber: m.startLineNumber,
+      startColumn: m.startColumn,
+      endLineNumber: m.endLineNumber,
+      endColumn: m.endColumn,
+    },
+    severity: m.severity,
+  };
+}
+
+/**
+ * Registers the HELIX language, Monarch tokenizer, dark theme, language
+ * configuration, acceptance-tracking command, and all 8 Monaco IDE providers.
+ */
+export function registerHelixLanguage(
+  monaco: typeof Monaco,
+  host: HelixLanguageHost,
+  engine: HelixIntelliSense = new HelixIntelliSense(),
+): Monaco.IDisposable {
+  if (!monaco.languages.getLanguages().some((l) => l.id === "helix")) {
     monaco.languages.register({ id: "helix", extensions: [".helix"] });
+  }
+
   monaco.languages.setMonarchTokensProvider("helix", {
-    keywords,
+    keywords: [...HELIX_KEYWORDS],
     tokenizer: {
       root: [
         [/#.*$/, "comment"],
@@ -54,6 +152,7 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
       ],
     },
   });
+
   monaco.languages.setLanguageConfiguration("helix", {
     comments: { lineComment: "#" },
     brackets: [
@@ -65,7 +164,20 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
       { open: "[", close: "]" },
       { open: '"', close: '"' },
     ],
+    wordPattern: /[a-zA-Z_][\w]*/,
+    folding: {
+      markers: {
+        start: /^\s*(?:rule|bind|when)\b/,
+        end: /^\s*end\s+(?:rule|bind|when)\b/,
+      },
+    },
+    indentationRules: {
+      increaseIndentPattern:
+        /^\s*(?:rule|when|then|otherwise|bind)\b(?![^#]*\bend\s+bind\b)/,
+      decreaseIndentPattern: /^\s*(?:end\b|otherwise\b|then\b)/,
+    },
   });
+
   monaco.editor.defineTheme("helix-dark", {
     base: "vs-dark",
     inherit: true,
@@ -88,73 +200,250 @@ export function register(monaco: typeof Monaco, getTables: () => string[]) {
       "editorIndentGuide.background1": "#1A333D",
     },
   });
-  return monaco.languages.registerCompletionItemProvider("helix", {
-    triggerCharacters: [".", " "],
-    provideCompletionItems(model, position) {
-      const word = model.getWordUntilPosition(position);
-      const prefix = model
-        .getLineContent(position.lineNumber)
-        .slice(0, position.column - 1);
-      const range = {
-        startLineNumber: position.lineNumber,
-        endLineNumber: position.lineNumber,
-        startColumn: word.startColumn,
-        endColumn: word.endColumn,
-      };
-      const words = /\.\w*$/.test(prefix)
-        ? ["latest"]
-        : /\bthen\s*$/.test(prefix)
-          ? ["alert", "suppress"]
-          : /\b(source|bind)\s+\w*$/.test(prefix)
-            ? getTables()
-            : /\bwhen\b/.test(prefix)
-              ? ["and", "or", "not", "within", ...keywords]
-              : keywords;
-      return {
-        suggestions: [
-          ...words.map((label) => ({
-            label,
-            kind: monaco.languages.CompletionItemKind.Keyword,
-            insertText: label,
-            documentation: docs[label] || `HELIX ${label} keyword`,
-            range,
+
+  const disposables: Monaco.IDisposable[] = [];
+
+  if (typeof monaco.editor.registerCommand === "function") {
+    disposables.push(
+      monaco.editor.registerCommand(
+        "helix.recordAcceptance",
+        (_accessor: unknown, contextKind?: unknown, label?: unknown) => {
+          if (typeof contextKind === "string" && typeof label === "string") {
+            engine.recordAcceptance(contextKind, label);
+          }
+        },
+      ),
+    );
+  }
+
+  disposables.push(
+    monaco.languages.registerCompletionItemProvider("helix", {
+      triggerCharacters: [".", '"', "(", "["],
+      provideCompletionItems(model, position) {
+        const items = engine.provideCompletions(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+          position,
+          host.getFilename(),
+        );
+        return {
+          suggestions: items.map((item) => ({
+            label: item.label,
+            kind: mapCompletionKind(monaco, item.kind),
+            insertText: item.insertText,
+            ...(item.isSnippet
+              ? {
+                  insertTextRules:
+                    monaco.languages.CompletionItemInsertTextRule
+                      .InsertAsSnippet,
+                }
+              : {}),
+            detail: item.detail,
+            documentation: item.documentation
+              ? { value: item.documentation }
+              : undefined,
+            sortText: item.sortText,
+            ...(item.filterText !== undefined
+              ? { filterText: item.filterText }
+              : {}),
+            range: item.range,
+            ...(item.preselect !== undefined
+              ? { preselect: item.preselect }
+              : {}),
+            command: {
+              id: "helix.recordAcceptance",
+              title: "Record",
+              arguments: [item.contextKind, item.label],
+            },
           })),
-          ...(!/\./.test(prefix)
-            ? [
-                {
-                  label: "rule template",
-                  kind: monaco.languages.CompletionItemKind.Snippet,
-                  insertText:
-                    'rule ${1:RuleName}:\n    source ${2:glucose_data}\n    when ${2:glucose_data}.latest > ${3:250} then\n        alert: "${4:High reading}", "WARNING"\n    end when\nend rule',
-                  insertTextRules:
-                    monaco.languages.CompletionItemInsertTextRule
-                      .InsertAsSnippet,
-                  range,
-                },
-                {
-                  label: "when / otherwise",
-                  kind: monaco.languages.CompletionItemKind.Snippet,
-                  insertText:
-                    'when ${1:reading}.latest > ${2:250} then\n    alert: "${3:High reading}"\notherwise\n    suppress: within ${4:1} hours\nend when',
-                  insertTextRules:
-                    monaco.languages.CompletionItemInsertTextRule
-                      .InsertAsSnippet,
-                  range,
-                },
-                {
-                  label: "filtered binding",
-                  kind: monaco.languages.CompletionItemKind.Snippet,
-                  insertText:
-                    'bind ${1:readings} = ${2:Vitals.heart_rate} where status == "final" within ${3:30} minutes end bind',
-                  insertTextRules:
-                    monaco.languages.CompletionItemInsertTextRule
-                      .InsertAsSnippet,
-                  range,
-                },
-              ]
-            : []),
-        ],
-      };
+        };
+      },
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerInlineCompletionsProvider("helix", {
+      provideInlineCompletions(model, position) {
+        const enabled = host.getSettings().inlinePredictions;
+        if (!enabled) {
+          return { items: [] };
+        }
+        const pred = engine.provideInlinePrediction(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+          position,
+          enabled,
+        );
+        return {
+          items: pred
+            ? [{ insertText: pred.insertText, range: pred.range }]
+            : [],
+        };
+      },
+      freeInlineCompletions() {},
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerHoverProvider("helix", {
+      provideHover(model, position) {
+        const res = engine.provideHover(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+          position,
+        );
+        if (!res) return null;
+        return {
+          range: res.range,
+          contents: [{ value: res.markdown }],
+        };
+      },
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerSignatureHelpProvider("helix", {
+      signatureHelpTriggerCharacters: [":", ",", "(", "["],
+      signatureHelpRetriggerCharacters: [","],
+      provideSignatureHelp(model, position) {
+        const res = engine.provideSignatureHelp(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+          position,
+        );
+        if (!res) return null;
+        return {
+          value: {
+            signatures: res.signatures.map((sig) => ({
+              label: sig.label,
+              documentation: sig.documentation
+                ? { value: sig.documentation }
+                : undefined,
+              parameters: sig.parameters.map((p) => ({
+                label: p.label,
+                documentation: p.documentation
+                  ? { value: p.documentation }
+                  : undefined,
+              })),
+            })),
+            activeSignature: res.activeSignature,
+            activeParameter: res.activeParameter,
+          },
+          dispose() {},
+        };
+      },
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerDefinitionProvider("helix", {
+      provideDefinition(model, position) {
+        const range = engine.provideDefinition(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+          position,
+        );
+        if (!range) return null;
+        return { uri: model.uri, range };
+      },
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerReferenceProvider("helix", {
+      provideReferences(model, position, context) {
+        const ranges = engine.provideReferences(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+          position,
+          context.includeDeclaration,
+        );
+        return ranges.map((range) => ({ uri: model.uri, range }));
+      },
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerDocumentSymbolProvider("helix", {
+      provideDocumentSymbols(model) {
+        const symbols = engine.provideDocumentSymbols(
+          model.uri.toString(),
+          model.getVersionId(),
+          model.getValue(),
+          host.getDataset(),
+        );
+        return symbols.map((sym) => toMonacoDocumentSymbol(monaco, sym));
+      },
+    }),
+  );
+
+  disposables.push(
+    monaco.languages.registerCodeActionProvider(
+      "helix",
+      {
+        provideCodeActions(model, range) {
+          const markers = monaco.editor
+            .getModelMarkers({ owner: "helix", resource: model.uri })
+            .map(markerToInput)
+            .filter((m) => rangesOverlap(m.range, range));
+
+          const quickFixes = engine.provideQuickFixes(
+            model.uri.toString(),
+            model.getVersionId(),
+            model.getValue(),
+            host.getDataset(),
+            markers,
+          );
+
+          const versionId = model.getVersionId();
+          const actions: Monaco.languages.CodeAction[] = quickFixes.map(
+            (fix) => ({
+              title: fix.title,
+              kind: "quickfix",
+              isPreferred: fix.isPreferred,
+              edit: {
+                edits: [
+                  {
+                    resource: model.uri,
+                    textEdit: {
+                      range: fix.edit.range,
+                      text: fix.edit.text,
+                    },
+                    versionId,
+                  },
+                ],
+              },
+            }),
+          );
+
+          return {
+            actions,
+            dispose() {},
+          };
+        },
+      },
+      { providedCodeActionKinds: ["quickfix"] },
+    ),
+  );
+
+  return {
+    dispose() {
+      for (const d of disposables) {
+        d.dispose();
+      }
+      engine.clearCache();
     },
-  });
+  };
 }

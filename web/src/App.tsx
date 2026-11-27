@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
+import "monaco-editor/esm/vs/editor/edcore.main.js";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import {
   Dna,
@@ -19,113 +20,88 @@ import {
   Plus,
   CheckCircle2,
   AlertCircle,
-  Terminal,
-  Search,
   Database,
   Zap,
 } from "lucide-react";
 import { presets } from "./presets";
-import { EngineClient } from "./services/engine";
-import {
-  loadWorkspace,
-  saveWorkspace,
-  validateDataset,
-  download,
-} from "./services/data";
+import { loadWorkspace, saveWorkspace, download } from "./services/data";
 import { byteOffsetToPosition } from "./services/positions";
-import { register } from "./editor/language";
-import type {
-  Analysis,
-  Dataset,
-  Diagnostic,
-  Evaluation,
-} from "./services/types";
+import { registerHelixLanguage } from "./editor/language";
+import { HelixIntelliSense } from "./editor/intellisense/engine";
+import type { HelixLanguageHost } from "./editor/intellisense/types";
+import type { Dataset, Diagnostic } from "./services/types";
 import DataPlayground from "./components/DataPlayground";
-import grammar from "../../docs/grammar.md?raw";
+import InspectionPanel, {
+  type InspectionTab,
+} from "./components/InspectionPanel";
+import { useStudioEngine } from "./hooks/useStudioEngine";
+
 (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
 };
 loader.config({ monaco });
 const initial = loadWorkspace();
-const tabs = [
-  "Problems",
-  "Tokens",
-  "Evaluation Results",
-  "Output",
-  "Grammar",
-] as const;
-type Tab = (typeof tabs)[number];
+
 export default function App() {
   const [workspace, setWorkspace] = useState(initial.workspace),
-    [storageWarning, setStorageWarning] = useState(initial.warning ?? "");
-  const [state, setState] = useState("Loading engine"),
-    [engineError, setEngineError] = useState(""),
-    [analysis, setAnalysis] = useState<Analysis | null>(null),
-    [evaluation, setEvaluation] = useState<Evaluation | null>(null),
-    [tab, setTab] = useState<Tab>("Problems"),
+    [storageWarning, setStorageWarning] = useState(initial.warning ?? ""),
+    [tab, setTab] = useState<InspectionTab>("Problems"),
     [settings, setSettings] = useState(false),
     [showData, setShowData] = useState(true),
-    [showSidebar, setShowSidebar] = useState(()=>window.innerWidth>900),
+    [showSidebar, setShowSidebar] = useState(() => window.innerWidth > 900),
     [cursor, setCursor] = useState({ lineNumber: 1, column: 1 }),
-    [tokenSearch, setTokenSearch] = useState(""),
-    [logs, setLogs] = useState<string[]>([]),
     [draftErrors, setDraftErrors] = useState<Record<string, string>>({}),
-    [evalRevision, setEvalRevision] = useState(-1),
-    [ready, setReady] = useState(false);
-  const [dataFocus,setDataFocus]=useState<{tableName:string;rowIndex:number;columnName:string}>();
-  const engine = useRef<EngineClient | null>(null),
-    editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
+    [fileEpoch, setFileEpoch] = useState(0),
+    [dataFocus, setDataFocus] = useState<{
+      tableName: string;
+      rowIndex: number;
+      columnName: string;
+    }>();
+
+  const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
     completion = useRef<monaco.IDisposable | null>(null),
     cursorListener = useRef<monaco.IDisposable | null>(null),
-    revision = useRef(0),
-    analysisId = useRef(0),
+    intellisenseRef = useRef<HelixIntelliSense | null>(null),
     baseline = useRef(workspace.source),
     fileInput = useRef<HTMLInputElement>(null),
     current = useRef(workspace);
+
+  if (!intellisenseRef.current) {
+    intellisenseRef.current = new HelixIntelliSense();
+  }
+  const intellisense = intellisenseRef.current;
   current.current = workspace;
-  const dataErrors = validateDataset(workspace.dataset),
-    errors = [...dataErrors, ...Object.values(draftErrors)];
-  const diagnostics: Diagnostic[] = [
-    ...(analysis?.diagnostics ?? []),
-    ...(evaluation && evalRevision === revision.current
-      ? evaluation.diagnostics
-      : []),
-  ];
-  const dirty = workspace.source !== baseline.current,
-    stale = evaluation !== null && evalRevision !== revision.current;
-  function log(message: string) {
-    setLogs((old) =>
-      [`${new Date().toLocaleTimeString()}  ${message}`, ...old].slice(0, 100),
-    );
-  }
-  function connect() {
-    engine.current?.dispose();
-    setReady(false);
-    setState("Loading engine");
-    setEngineError("");
-    const client = new EngineClient();
-    engine.current = client;
-    void client.ready
-      .then(() => {
-        if (engine.current !== client) return;
-        setReady(true);
-        setState("Ready");
-        log("C11 / WebAssembly engine initialized");
-      })
-      .catch((e) => {
-        if (engine.current !== client) return;
-        setState("Engine Error");
-        setEngineError(String(e));
-      });
-  }
+
+  const openEvaluationTab = useCallback(() => setTab("Evaluation Results"), []);
+
+  const studio = useStudioEngine({
+    workspace,
+    draftErrors,
+    editorRef: editor,
+    onEvaluationStart: openEvaluationTab,
+  });
+
+  const dirty = workspace.source !== baseline.current;
+  const model = editor.current?.getModel();
+  const activeRule = useMemo(
+    () =>
+      intellisense.getActiveRuleName(
+        model ? model.uri.toString() : "helix://studio/editor",
+        model ? model.getVersionId() : studio.revision.current,
+        workspace.source,
+        workspace.dataset,
+        cursor,
+      ),
+    [intellisense, model, studio.revision, workspace.source, workspace.dataset, cursor],
+  );
+
   useEffect(() => {
-    connect();
     return () => {
-      engine.current?.dispose();
       completion.current?.dispose();
       cursorListener.current?.dispose();
     };
   }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       const warning = saveWorkspace(workspace);
@@ -133,6 +109,7 @@ export default function App() {
     }, 300);
     return () => clearTimeout(timer);
   }, [workspace]);
+
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (dirty) {
@@ -143,144 +120,65 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
-  const analyze = useCallback(async () => {
-    if (!engine.current || !ready) return;
-    const id = ++analysisId.current,
-      source = current.current.source;
-    setState("Analyzing");
-    const start = performance.now();
-    try {
-      const result = await engine.current.request("analyze", source);
-      if (id !== analysisId.current || source !== current.current.source)
-        return;
-      setAnalysis(result);
-      setState(result.success ? "Valid" : "Invalid");
-      log(
-        `Analysis ${result.success ? "passed" : "failed"} · ${result.tokenCount} tokens · ${(performance.now() - start).toFixed(1)} ms`,
-      );
-    } catch (e) {
-      if (String(e).includes("Superseded") || id !== analysisId.current) return;
-      setState("Engine Error");
-      setEngineError(String(e));
-    }
-  }, [ready]);
-  useEffect(() => {
-    if (workspace.autoAnalyze && ready) {
-      const timer = setTimeout(() => void analyze(), 350);
-      return () => clearTimeout(timer);
-    }
-  }, [workspace.source, workspace.autoAnalyze, ready, analyze]);
-  useEffect(() => {
-    const model = editor.current?.getModel();
-    if (!model) return;
-    monaco.editor.setModelMarkers(
-      model,
-      "helix",
-      diagnostics
-        .filter((d) => d.startOffset !== undefined)
-        .map((d) => {
-          const start = byteOffsetToPosition(workspace.source, d.startOffset!),
-            end = byteOffsetToPosition(
-              workspace.source,
-              d.endOffset ?? d.startOffset! + 1,
-            );
-          return {
-            startLineNumber: start.lineNumber,
-            startColumn: start.column,
-            endLineNumber: end.lineNumber,
-            endColumn: Math.max(
-              end.column,
-              start.lineNumber === end.lineNumber ? start.column + 1 : 1,
-            ),
-            severity:
-              d.severity === "error"
-                ? monaco.MarkerSeverity.Error
-                : monaco.MarkerSeverity.Warning,
-            message: d.message,
-            code: d.code,
-          };
-        }),
-    );
-  }, [analysis, evaluation, workspace.source, evalRevision]);
+
   function sourceChanged(source: string) {
-    revision.current++;
-    analysisId.current++;
-    setAnalysis(null);
+    studio.onSourceChanged();
     setWorkspace((w) => ({ ...w, source }));
-    setState(ready ? "Ready" : state);
   }
+
   function setDataset(dataset: Dataset) {
-    revision.current++;
-    if(ready)setState("Ready");
+    studio.onDatasetChanged(dataset);
     setWorkspace((w) => ({ ...w, dataset }));
   }
-  const setDraftError = useCallback(
-    (id: string, error: string) =>
-      setDraftErrors((old) => {
-        if (old[id] === error || (!old[id] && !error)) return old;
-        const next = { ...old };
-        if (error) next[id] = error;
-        else delete next[id];
-        return next;
-      }),
-    [],
-  );
-  async function evaluate() {
-    if (!engine.current || !ready || errors.length) return;
-    const rev = revision.current,
-      source = workspace.source,
-      data = structuredClone(workspace.dataset);
-    setState("Evaluating");
-    setTab("Evaluation Results");
-    const start = performance.now();
-    try {
-      const result = await engine.current.request("evaluate", source, data);
-      if (rev !== revision.current) {setState(ready?"Ready":"Loading engine");return;}
-      setEvaluation(result);
-      setEvalRevision(rev);
-      setState(result.success ? "Valid" : "Invalid");
-      log(
-        `Evaluation ${result.success ? "completed" : "failed"} · ${result.results.length} patient results · ${(performance.now() - start).toFixed(1)} ms`,
-      );
-    } catch (e) {
-      setState("Engine Error");
-      setEngineError(String(e));
-    }
-  }
-  function navigate(d: Diagnostic) {
+
+  const setDraftError = useCallback((id: string, error: string) => {
+    setDraftErrors((old) => {
+      if (old[id] === error || (!old[id] && !error)) return old;
+      const next = { ...old };
+      if (error) next[id] = error;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+
+  function navigate(d: Diagnostic, snapshotSource = workspace.source) {
     if (d.startOffset === undefined) {
       setShowData(true);
-      if(d.tableName&&d.rowIndex!==undefined&&d.columnName)setDataFocus({tableName:d.tableName,rowIndex:d.rowIndex,columnName:d.columnName});
+      if (d.tableName && d.rowIndex !== undefined && d.columnName)
+        setDataFocus({
+          tableName: d.tableName,
+          rowIndex: d.rowIndex,
+          columnName: d.columnName,
+        });
       return;
     }
-    const position = byteOffsetToPosition(workspace.source, d.startOffset);
+    const position = byteOffsetToPosition(snapshotSource, d.startOffset);
     editor.current?.setPosition(position);
     editor.current?.revealPositionInCenter(position);
     editor.current?.focus();
   }
+
   function replaceFile(
     source: string,
     filename: string,
     dataset = workspace.dataset,
   ) {
     if (dirty && !confirm("Discard unsaved source changes?")) return;
-    revision.current++;
-    analysisId.current++;
     baseline.current = source;
+    studio.onFileReplaced();
     setWorkspace((w) => ({
       ...w,
       source,
       filename,
       dataset: structuredClone(dataset),
     }));
-    setAnalysis(null);
-    setEvaluation(null);
     setDraftErrors({});
-    if(window.innerWidth<=900)setShowSidebar(false);
+    setFileEpoch((n) => n + 1);
+    if (window.innerWidth <= 900) setShowSidebar(false);
     setTab("Problems");
-    log(`Opened ${filename}`);
+    studio.log(`Opened ${filename}`);
   }
-  const errorCount = diagnostics.filter((d) => d.severity === "error").length;
+
   return (
     <div className="studio">
       <header className="app-header">
@@ -325,7 +223,7 @@ export default function App() {
               download(workspace.filename, workspace.source);
               baseline.current = workspace.source;
               setWorkspace((w) => ({ ...w }));
-              log("Source downloaded");
+              studio.log("Source downloaded");
             }}
           >
             <Save size={15} />
@@ -334,17 +232,19 @@ export default function App() {
           <span className="toolbar-divider" />
           <button
             className="primary"
-            disabled={!ready}
-            onClick={() => void analyze()}
+            disabled={!studio.ready}
+            onClick={() => void studio.analyze()}
           >
             <Activity size={15} />
             Analyze
           </button>
           <button
             className="evaluate"
-            disabled={!ready || !!errors.length}
-            title={errors[0] ?? "Evaluate rules using the table snapshot"}
-            onClick={() => void evaluate()}
+            disabled={!studio.ready || !!studio.errors.length}
+            title={
+              studio.errors[0] ?? "Evaluate rules using the table snapshot"
+            }
+            onClick={() => void studio.evaluate()}
           >
             <Play size={14} fill="currentColor" />
             Evaluate
@@ -383,7 +283,33 @@ export default function App() {
                   setWorkspace((w) => ({ ...w, autoAnalyze: e.target.checked }))
                 }
               />
-              Automatic analysis · 350 ms
+              Automatic analysis · 180 ms
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={workspace.inlinePredictions ?? true}
+                onChange={(e) =>
+                  setWorkspace((w) => ({
+                    ...w,
+                    inlinePredictions: e.target.checked,
+                  }))
+                }
+              />
+              Inline predictions (ghost text)
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={workspace.autoSuggest ?? true}
+                onChange={(e) =>
+                  setWorkspace((w) => ({
+                    ...w,
+                    autoSuggest: e.target.checked,
+                  }))
+                }
+              />
+              Auto-trigger suggestions
             </label>
             <label>
               Font size{" "}
@@ -410,10 +336,10 @@ export default function App() {
           {storageWarning}
         </div>
       )}
-      {engineError && (
+      {studio.engineError && (
         <div className="error-strip" role="alert">
-          {engineError}
-          <button onClick={connect}>Retry engine</button>
+          {studio.engineError}
+          <button onClick={studio.connect}>Retry engine</button>
         </div>
       )}
       <div
@@ -474,12 +400,12 @@ export default function App() {
             <div className="sidebar-bottom">
               <div className="quick-stats">
                 <span>
-                  Tokens<strong>{analysis?.tokenCount ?? "—"}</strong>
+                  Tokens<strong>{studio.analysis?.tokenCount ?? "—"}</strong>
                 </span>
                 <span>
                   Problems
-                  <strong className={errorCount ? "error-text" : ""}>
-                    {errorCount}
+                  <strong className={studio.errorCount ? "error-text" : ""}>
+                    {studio.errorCount}
                   </strong>
                 </span>
               </div>
@@ -526,6 +452,12 @@ export default function App() {
             HELIX <ChevronRight size={11} />
             Rules <ChevronRight size={11} />
             <span>{workspace.filename.replace(".helix", "")}</span>
+            {activeRule && (
+              <>
+                <ChevronRight size={11} />
+                <span className="breadcrumb-rule">{activeRule}</span>
+              </>
+            )}
             <span className="language-tag">.helix</span>
           </div>
           <div className="code-editor">
@@ -535,15 +467,31 @@ export default function App() {
               value={workspace.source}
               beforeMount={(m) => {
                 completion.current?.dispose();
-                completion.current = register(m, () =>
-                  current.current.dataset.tables.map((t) => t.name),
+                const host: HelixLanguageHost = {
+                  getDataset: () => current.current.dataset,
+                  getSettings: () => ({
+                    inlinePredictions:
+                      current.current.inlinePredictions ?? true,
+                    autoSuggest: current.current.autoSuggest ?? true,
+                  }),
+                  getFilename: () => current.current.filename,
+                };
+                completion.current = registerHelixLanguage(
+                  m,
+                  host,
+                  intellisense,
                 );
               }}
               onMount={(e) => {
                 editor.current = e;
+                cursorListener.current?.dispose();
                 cursorListener.current = e.onDidChangeCursorPosition((event) =>
                   setCursor(event.position),
                 );
+                const mountedModel = e.getModel();
+                if (mountedModel) {
+                  studio.syncMountedMarkers(mountedModel);
+                }
               }}
               onChange={(value) => {
                 if (value !== undefined && value !== workspace.source)
@@ -561,355 +509,72 @@ export default function App() {
                 renderLineHighlight: "line",
                 tabSize: 4,
                 overviewRulerBorder: false,
+                inlineSuggest: { enabled: workspace.inlinePredictions ?? true },
+                quickSuggestions:
+                  (workspace.autoSuggest ?? true)
+                    ? { other: "on", comments: "off", strings: "on" }
+                    : false,
+                suggestOnTriggerCharacters: workspace.autoSuggest ?? true,
+                parameterHints: { enabled: true },
+                lightbulb: {
+                  enabled: monaco.editor.ShowLightbulbIconMode.On,
+                },
+                suggest: { preview: true, showStatusBar: true },
               }}
               loading={<div className="empty-state">Loading editor…</div>}
             />
           </div>
-          <section
-            className="bottom-panel"
-            aria-label="Analysis and evaluation panels"
-          >
-            <div className="panel-tabs" role="tablist">
-              {tabs.map((t) => (
-                <button
-                  key={t}
-                  role="tab"
-                  id={`tab-${t.replaceAll(' ','-')}`}
-                  aria-controls="inspection-panel"
-                  tabIndex={tab===t?0:-1}
-                  onKeyDown={event=>{
-                    const at=tabs.indexOf(t);let next=at;
-                    if(event.key==='ArrowRight')next=(at+1)%tabs.length;
-                    else if(event.key==='ArrowLeft')next=(at+tabs.length-1)%tabs.length;
-                    else if(event.key==='Home')next=0;
-                    else if(event.key==='End')next=tabs.length-1;
-                    else return;
-                    event.preventDefault();setTab(tabs[next]);
-                    document.getElementById(`tab-${tabs[next].replaceAll(' ','-')}`)?.focus();
-                  }}
-                  aria-selected={tab === t}
-                  className={tab === t ? "active" : ""}
-                  onClick={() => setTab(t)}
-                >
-                  {t}
-                  {t === "Problems" && (
-                    <span className={`count ${errorCount ? "has-errors" : ""}`}>
-                      {diagnostics.length}
-                    </span>
-                  )}
-                  {t === "Evaluation Results" && evaluation && (
-                    <span className="count">{evaluation.results.length}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-            <div className="panel-content" id="inspection-panel" role="tabpanel" aria-labelledby={`tab-${tab.replaceAll(' ','-')}`}>
-              {tab === "Problems" &&
-                (diagnostics.length ? (
-                  <div className="problem-list">
-                    {diagnostics.map((d, i) => (
-                      <button
-                        key={i}
-                        className="problem-row"
-                        onClick={() => navigate(d)}
-                      >
-                        <AlertCircle size={14} />
-                        <span className="small-tag">{d.category}</span>
-                        <span>{d.message}</span>
-                        <code>
-                          {d.line ? `Ln ${d.line}, Col ${d.column}` : d.code}
-                        </code>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state">
-                    <CheckCircle2 size={23} />
-                    <strong>
-                      {analysis?.success
-                        ? "No problems found"
-                        : "Ready for analysis"}
-                    </strong>
-                    <p>
-                      {analysis?.success
-                        ? "Your HELIX syntax is valid. Evaluation checks bindings and data."
-                        : "Analyze your program to see C-engine diagnostics."}
-                    </p>
-                  </div>
-                ))}
-              {tab === "Tokens" && (
-                <>
-                  <div className="token-toolbar">
-                    <Search size={14} />
-                    <input
-                      aria-label="Search tokens"
-                      placeholder="Filter lexeme, type or category…"
-                      value={tokenSearch}
-                      onChange={(e) => setTokenSearch(e.target.value)}
-                    />
-                    <span>{analysis?.tokenCount ?? 0} tokens</span>
-                  </div>
-                  <div className="token-scroll">
-                    <table className="token-table">
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Lexeme</th>
-                          <th>Token type</th>
-                          <th>Line</th>
-                          <th>Column</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {analysis?.tokens
-                          .filter((t) =>
-                            `${t.lexeme} ${t.type} ${t.category}`
-                              .toLowerCase()
-                              .includes(tokenSearch.toLowerCase()),
-                          )
-                          .map((t) => (
-                            <tr
-                              key={t.index}
-                              onClick={() =>
-                                navigate({
-                                  severity: "info",
-                                  category: "token",
-                                  code: t.type,
-                                  message: t.lexeme,
-                                  startOffset: t.startOffset,
-                                })
-                              }
-                            >
-                              <td>{t.index}</td>
-                              <td>
-                                <code>{t.lexeme || "EOF"}</code>
-                              </td>
-                              <td className="muted">{t.type}</td>
-                              <td>{t.line}</td>
-                              <td>{t.column}</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-              {tab === "Evaluation Results" && (
-                <>
-                  <div className="simulation-disclaimer">
-                    Simulated Rule Output — Not for Clinical Use
-                  </div>
-                  {stale && (
-                    <div className="warning-strip">
-                      Results are from an earlier source or data snapshot.
-                      Evaluate again.
-                    </div>
-                  )}
-                  {evaluation ? (
-                    <>
-                      <div className="evaluation-summary">
-                        <strong>
-                          {evaluation.results.length} patient results
-                        </strong>
-                        <span>{evaluation.evaluationTime}</span>
-                        <span>
-                          {evaluation.success
-                            ? "Evaluation complete"
-                            : "Evaluation has errors"}
-                        </span>
-                      </div>
-                      {evaluation.diagnostics.map((d, i) => (
-                        <button
-                          key={i}
-                          className="problem-row"
-                          onClick={() => navigate(d)}
-                        >
-                          <AlertCircle size={14} />
-                          {d.message}
-                        </button>
-                      ))}
-                      {evaluation.results.map((r) => (
-                        <details
-                          className="patient-result"
-                          key={`${r.ruleId}/${r.patientId}`}
-                          open
-                        >
-                          <summary>
-                            <span className="patient-id">{r.patientId}</span>
-                            <span>{r.ruleName}</span>
-                            <span className="result-badges">
-                              {r.conditions.map((c) => (
-                                <b
-                                  key={c.conditionId}
-                                  className={`outcome ${c.outcome.toLowerCase()}`}
-                                >
-                                  {c.outcome}
-                                </b>
-                              ))}
-                            </span>
-                          </summary>
-                          {r.conditions.map((c) => (
-                            <div
-                              className="condition-trace"
-                              key={c.conditionId}
-                            >
-                              <button
-                                className="condition-text"
-                                onClick={() =>
-                                  navigate({
-                                    severity: "info",
-                                    category: "condition",
-                                    code: c.conditionId,
-                                    message: c.conditionText,
-                                    startOffset: c.startOffset,
-                                  })
-                                }
-                              >
-                                {c.conditionText}
-                              </button>
-                              {c.resolvedValues.map((v, i) => (
-                                <div className="resolved-value" key={i}>
-                                  <code>{v.expression}</code>
-                                  <b>
-                                    {v.value === null
-                                      ? "MISSING"
-                                      : String(v.value)}
-                                  </b>
-                                  <span>
-                                    {v.table}.{v.column} ·{" "}
-                                    {v.rowIndex === null
-                                      ? "no eligible row"
-                                      : `row ${v.rowIndex + 1}`}
-                                  </span>
-                                  {v.reason && <small>{v.reason}</small>}
-                                </div>
-                              ))}
-                            </div>
-                          ))}
-                          {r.actions.map((a, i) => (
-                            <div
-                              key={i}
-                              className={`action-event ${a.kind} ${a.severity?.toLowerCase() ?? ""}`}
-                            >
-                              {a.kind === "alert" ? (
-                                <>
-                                  <AlertCircle size={14} />
-                                  <strong>{a.severity}</strong>
-                                  <span>{a.message}</span>
-                                  {!!a.payload?.length && (
-                                    <code>{JSON.stringify(a.payload)}</code>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  <span>Simulated suppression</span>
-                                  <code>
-                                    {a.durationMs
-                                      ? `${a.durationMs / 60000} minutes`
-                                      : a.reason}
-                                  </code>
-                                </>
-                              )}
-                            </div>
-                          ))}
-                          {!r.actions.length && (
-                            <p className="no-action">No action triggered</p>
-                          )}
-                        </details>
-                      ))}
-                    </>
-                  ) : (
-                    <div className="empty-state">
-                      <Play size={22} />
-                      <strong>Evaluate against your data</strong>
-                      <p>
-                        Run rules for each patient at the selected timestamp.
-                      </p>
-                    </div>
-                  )}
-                </>
-              )}
-              {tab === "Output" && (
-                <div className="output-log">
-                  <div>
-                    <Terminal size={14} /> Engine output
-                  </div>
-                  {logs.length ? (
-                    logs.map((line, i) => <p key={i}>{line}</p>)
-                  ) : (
-                    <p>No execution output yet.</p>
-                  )}
-                </div>
-              )}
-              {tab === "Grammar" && (
-                <div className="grammar-reference">
-                  <div className="grammar-links">
-                    {[
-                      "Reserved Words",
-                      "Expressions",
-                      "Declarations",
-                      "Actions",
-                    ].map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => {
-                          const area = document.querySelector(".grammar-text");
-                          if (area) {
-                            const match =
-                              s === "Reserved Words"
-                                ? "Reserved Words"
-                                : s === "Expressions"
-                                  ? "expression"
-                                  : s === "Declarations"
-                                    ? "Declarations"
-                                    : "Actions";
-                            const at = grammar.indexOf(match);
-                            area.scrollTop = Math.max(
-                              0,
-                              grammar.slice(0, at).split("\n").length * 18 - 40,
-                            );
-                          }
-                        }}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                  <pre className="grammar-text">{grammar}</pre>
-                </div>
-              )}
-            </div>
-          </section>
+          <InspectionPanel
+            tab={tab}
+            setTab={setTab}
+            diagnosticEntries={studio.diagnosticEntries}
+            diagnosticsCount={studio.diagnostics.length}
+            errorCount={studio.errorCount}
+            analysis={studio.analysis}
+            analysisSource={studio.analysisSource}
+            evaluation={studio.evaluation}
+            evalSource={studio.evalSource}
+            stale={studio.stale}
+            logs={studio.logs}
+            navigate={navigate}
+          />
         </main>
         {showData && (
           <DataPlayground
+            key={fileEpoch}
             dataset={workspace.dataset}
             setDataset={setDataset}
             setDraftError={setDraftError}
-          focusCell={dataFocus}
+            focusCell={dataFocus}
           />
         )}
       </div>
-      {errors.length > 0 && (
+      {studio.errors.length > 0 && (
         <div className="data-validation" role="alert">
           <Database size={14} />
           <strong>Dataset needs attention:</strong>
           <span>
-            {errors[0]}
-            {errors.length > 1 ? ` (+${errors.length - 1} more)` : ""}
+            {studio.errors[0]}
+            {studio.errors.length > 1
+              ? ` (+${studio.errors.length - 1} more)`
+              : ""}
           </span>
         </div>
       )}
       <footer className="status-bar">
         <span>
           <span
-            className={`status-dot ${state === "Engine Error" ? "failed" : ""}`}
+            className={`status-dot ${studio.state === "Engine Error" ? "failed" : ""}`}
           />
-          {state}
+          {studio.state}
         </span>
         <span>
-          {errorCount ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}{" "}
-          {errorCount} errors
+          {studio.errorCount ? (
+            <AlertCircle size={12} />
+          ) : (
+            <CheckCircle2 size={12} />
+          )}{" "}
+          {studio.errorCount} errors
         </span>
         <span className="status-spacer" />
         <span>
@@ -919,7 +584,7 @@ export default function App() {
         <span>HELIX DSL</span>
         <span className="engine-status">
           <Zap size={12} />
-          {ready ? "C11 / WASM Engine Active" : "Engine unavailable"}
+          {studio.ready ? "C11 / WASM Engine Active" : "Engine unavailable"}
         </span>
       </footer>
     </div>

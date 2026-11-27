@@ -32,8 +32,10 @@ function CellEditor({
   const [error, setError] = useState("");
   useEffect(() => {
     setRaw(value === null ? "" : String(value));
-  }, [value]);
-  useEffect(() => () => onError(label, ""), [label]);
+    setError("");
+    onError(label, "");
+  }, [value, label, onError]);
+  useEffect(() => () => onError(label, ""), [label, onError]);
   return (
     <div className={`cell ${error ? "invalid-cell" : ""}`}>
       <input

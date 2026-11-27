@@ -37,12 +37,17 @@ export class EngineClient {
   }
   async request(kind: "analyze", source: string): Promise<Analysis>;
   async request(
+    kind: "validate",
+    source: string,
+    dataset: Dataset,
+  ): Promise<Evaluation>;
+  async request(
     kind: "evaluate",
     source: string,
     dataset: Dataset,
   ): Promise<Evaluation>;
   async request(
-    kind: "analyze" | "evaluate",
+    kind: "analyze" | "validate" | "evaluate",
     source: string,
     dataset?: Dataset,
   ): Promise<unknown> {

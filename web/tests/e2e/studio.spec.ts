@@ -103,3 +103,67 @@ test('keyboard tabs and mobile explorer remain usable',async({page})=>{
  await page.getByRole('button',{name:'Toggle explorer'}).click();await page.getByRole('button',{name:/Recent heart rate/}).click();
  await page.getByRole('button',{name:'Evaluate',exact:true}).click();await expect(page.getByText('2 patient results')).toBeVisible();
 });
+
+test("IntelliSense predicts bound series, accepts inline ghost-text, shows hover docs, and persists settings", async ({
+  page,
+}) => {
+  const failures: string[] = [];
+  page.on("pageerror", (e) => failures.push(e.message));
+  await page.goto("/");
+  await expect(page.getByText("C11 / WASM Engine Active")).toBeVisible();
+  const editorLines = page.locator(".monaco-editor .view-lines");
+  await expect(editorLines).toBeVisible();
+
+  // Hover docs on bound/declared symbol
+  await editorLines.getByText("threshold").first().hover();
+  const hoverWidget = page.locator(".monaco-editor .monaco-hover");
+  await expect(hoverWidget).toBeVisible();
+  await expect(hoverWidget).toContainText("threshold");
+
+  // 1. Typing after `when ` triggers predictive suggestions showing `glucose_data.latest`
+  await editorLines.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("rule Smoke:");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("source glucose_data");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("when g");
+  const suggestWidget = page.locator(".monaco-editor .suggest-widget");
+  await expect(suggestWidget).toBeVisible();
+  await expect(suggestWidget).toContainText("glucose_data.latest");
+
+  // 2. Typing `end ` on a new line inside unclosed `when` shows ghost-text and `Tab` completes `end when`
+  await page.keyboard.press("Escape");
+  await page.keyboard.type("lucose_data.latest > 250:");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("then:");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("let fired := 1");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("end ");
+  await expect(
+    page.locator(".monaco-editor .ghost-text-decoration"),
+  ).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(editorLines).toContainText(/end\s+when/);
+
+  // 3. Settings toggles persist across reload
+  await page.getByRole("button", { name: "Settings" }).click();
+  const inlineCheckbox = page.getByLabel("Inline predictions (ghost text)");
+  const autoSuggestCheckbox = page.getByLabel("Auto-trigger suggestions");
+  await expect(inlineCheckbox).toBeChecked();
+  await expect(autoSuggestCheckbox).toBeChecked();
+  await inlineCheckbox.uncheck();
+  await autoSuggestCheckbox.uncheck();
+  await page.waitForTimeout(500);
+  await page.reload();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(
+    page.getByLabel("Inline predictions (ghost text)"),
+  ).not.toBeChecked();
+  await expect(
+    page.getByLabel("Auto-trigger suggestions"),
+  ).not.toBeChecked();
+  expect(failures).toEqual([]);
+});

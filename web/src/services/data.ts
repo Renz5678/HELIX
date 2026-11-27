@@ -225,6 +225,9 @@ export function loadWorkspace(storage: StorageLike = localStorage): {
       typeof w.source !== "string" ||
       typeof w.filename !== "string" ||
       typeof w.autoAnalyze !== "boolean" ||
+      (w.inlinePredictions !== undefined &&
+        typeof w.inlinePredictions !== "boolean") ||
+      (w.autoSuggest !== undefined && typeof w.autoSuggest !== "boolean") ||
       !Number.isFinite(w.fontSize) ||
       w.fontSize < 10 ||
       w.fontSize > 24 ||
@@ -233,7 +236,13 @@ export function loadWorkspace(storage: StorageLike = localStorage): {
       validateDataset(w.dataset).length
     )
       throw Error("Stored workspace is invalid or has an unsupported version");
-    return { workspace: w };
+    return {
+      workspace: {
+        ...w,
+        inlinePredictions: w.inlinePredictions ?? true,
+        autoSuggest: w.autoSuggest ?? true,
+      },
+    };
   } catch (e) {
     return {
       workspace: structuredClone(defaultWorkspace),

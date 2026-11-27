@@ -20,192 +20,88 @@ import {
   Plus,
   CheckCircle2,
   AlertCircle,
-  Terminal,
-  Search,
   Database,
   Zap,
 } from "lucide-react";
 import { presets } from "./presets";
-import { EngineClient } from "./services/engine";
-import {
-  loadWorkspace,
-  saveWorkspace,
-  validateDataset,
-  download,
-} from "./services/data";
+import { loadWorkspace, saveWorkspace, download } from "./services/data";
 import { byteOffsetToPosition } from "./services/positions";
-import {
-  combineDiagnosticEntries,
-  getDatasetEditDiagnosticPatch,
-  isEvaluationStale,
-  resolveMarkerSync,
-  shouldScheduleDatasetValidation,
-  type DiagnosticEntry,
-} from "./services/diagnostics";
 import { registerHelixLanguage } from "./editor/language";
 import { HelixIntelliSense } from "./editor/intellisense/engine";
 import type { HelixLanguageHost } from "./editor/intellisense/types";
-import type {
-  Analysis,
-  Dataset,
-  Diagnostic,
-  Evaluation,
-} from "./services/types";
+import type { Dataset, Diagnostic } from "./services/types";
 import DataPlayground from "./components/DataPlayground";
-import grammar from "../../docs/grammar.md?raw";
+import InspectionPanel, {
+  type InspectionTab,
+} from "./components/InspectionPanel";
+import { useStudioEngine } from "./hooks/useStudioEngine";
+
 (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
 };
 loader.config({ monaco });
 const initial = loadWorkspace();
-const tabs = [
-  "Problems",
-  "Tokens",
-  "Evaluation Results",
-  "Output",
-  "Grammar",
-] as const;
-type Tab = (typeof tabs)[number];
-
-function applyModelMarkers(
-  model: monaco.editor.ITextModel,
-  entries: DiagnosticEntry[],
-) {
-  monaco.editor.setModelMarkers(
-    model,
-    "helix",
-    entries
-      .filter(({ d }) => d.startOffset !== undefined)
-      .map(({ d, source }) => {
-        const start = byteOffsetToPosition(source, d.startOffset!),
-          end = byteOffsetToPosition(
-            source,
-            d.endOffset ?? d.startOffset! + 1,
-          );
-        return {
-          startLineNumber: start.lineNumber,
-          startColumn: start.column,
-          endLineNumber: end.lineNumber,
-          endColumn: Math.max(
-            end.column,
-            start.lineNumber === end.lineNumber ? start.column + 1 : 1,
-          ),
-          severity:
-            d.severity === "error"
-              ? monaco.MarkerSeverity.Error
-              : d.severity === "warning"
-                ? monaco.MarkerSeverity.Warning
-                : monaco.MarkerSeverity.Info,
-          message: d.message,
-          code: d.code,
-        };
-      }),
-  );
-}
 
 export default function App() {
   const [workspace, setWorkspace] = useState(initial.workspace),
-    [storageWarning, setStorageWarning] = useState(initial.warning ?? "");
-  const [state, setState] = useState("Loading engine"),
-    [engineError, setEngineError] = useState(""),
-    [analysis, setAnalysis] = useState<Analysis | null>(null),
-    [analysisSource, setAnalysisSource] = useState(""),
-    [semanticDiagnostics, setSemanticDiagnostics] = useState<Diagnostic[]>([]),
-    [semanticSource, setSemanticSource] = useState(""),
-    [evaluation, setEvaluation] = useState<Evaluation | null>(null),
-    [evalSource, setEvalSource] = useState(""),
-    [tab, setTab] = useState<Tab>("Problems"),
+    [storageWarning, setStorageWarning] = useState(initial.warning ?? ""),
+    [tab, setTab] = useState<InspectionTab>("Problems"),
     [settings, setSettings] = useState(false),
     [showData, setShowData] = useState(true),
-    [showSidebar, setShowSidebar] = useState(()=>window.innerWidth>900),
+    [showSidebar, setShowSidebar] = useState(() => window.innerWidth > 900),
     [cursor, setCursor] = useState({ lineNumber: 1, column: 1 }),
-    [tokenSearch, setTokenSearch] = useState(""),
-    [logs, setLogs] = useState<string[]>([]),
     [draftErrors, setDraftErrors] = useState<Record<string, string>>({}),
-    [evalRevision, setEvalRevision] = useState(-1),
-    [ready, setReady] = useState(false);
-  const [dataFocus,setDataFocus]=useState<{tableName:string;rowIndex:number;columnName:string}>();
-  const engine = useRef<EngineClient | null>(null),
-    editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
+    [fileEpoch, setFileEpoch] = useState(0),
+    [dataFocus, setDataFocus] = useState<{
+      tableName: string;
+      rowIndex: number;
+      columnName: string;
+    }>();
+
+  const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
     completion = useRef<monaco.IDisposable | null>(null),
     cursorListener = useRef<monaco.IDisposable | null>(null),
-    intellisense = useRef(new HelixIntelliSense()),
-    revision = useRef(0),
-    analysisId = useRef(0),
-    validateId = useRef(0),
+    intellisenseRef = useRef<HelixIntelliSense | null>(null),
     baseline = useRef(workspace.source),
     fileInput = useRef<HTMLInputElement>(null),
-    current = useRef(workspace),
-    draftErrorsRef = useRef(draftErrors),
-    semanticSourceRef = useRef(semanticSource),
-    lastValidatedDatasetRef = useRef<Dataset | null>(null);
+    current = useRef(workspace);
+
+  if (!intellisenseRef.current) {
+    intellisenseRef.current = new HelixIntelliSense();
+  }
+  const intellisense = intellisenseRef.current;
   current.current = workspace;
-  draftErrorsRef.current = draftErrors;
-  semanticSourceRef.current = semanticSource;
-  const dataErrors = validateDataset(workspace.dataset),
-    errors = [...dataErrors, ...Object.values(draftErrors)];
-  const diagnosticEntries = combineDiagnosticEntries(
-    analysis,
-    analysisSource,
-    semanticDiagnostics,
-    semanticSource,
-    evaluation,
-    evalSource,
-    evaluation !== null && evalRevision === revision.current,
-  );
-  const diagnostics: Diagnostic[] = diagnosticEntries.map((entry) => entry.d);
-  const diagnosticsRef = useRef(diagnostics);
-  diagnosticsRef.current = diagnostics;
-  const latestDiagnosticEntriesRef = useRef(diagnosticEntries);
-  latestDiagnosticEntriesRef.current = diagnosticEntries;
-  const dirty = workspace.source !== baseline.current,
-    stale = isEvaluationStale(evaluation, evalRevision, revision.current);
+
+  const openEvaluationTab = useCallback(() => setTab("Evaluation Results"), []);
+
+  const studio = useStudioEngine({
+    workspace,
+    draftErrors,
+    editorRef: editor,
+    onEvaluationStart: openEvaluationTab,
+  });
+
+  const dirty = workspace.source !== baseline.current;
   const model = editor.current?.getModel();
   const activeRule = useMemo(
     () =>
-      intellisense.current.getActiveRuleName(
+      intellisense.getActiveRuleName(
         model ? model.uri.toString() : "helix://studio/editor",
-        model ? model.getVersionId() : revision.current,
+        model ? model.getVersionId() : studio.revision.current,
         workspace.source,
         workspace.dataset,
         cursor,
       ),
-    [model, workspace.source, workspace.dataset, cursor],
+    [intellisense, model, studio.revision, workspace.source, workspace.dataset, cursor],
   );
-  function log(message: string) {
-    setLogs((old) =>
-      [`${new Date().toLocaleTimeString()}  ${message}`, ...old].slice(0, 100),
-    );
-  }
-  function connect() {
-    engine.current?.dispose();
-    lastValidatedDatasetRef.current = null;
-    setReady(false);
-    setState("Loading engine");
-    setEngineError("");
-    const client = new EngineClient();
-    engine.current = client;
-    void client.ready
-      .then(() => {
-        if (engine.current !== client) return;
-        setReady(true);
-        setState("Ready");
-        log("C11 / WebAssembly engine initialized");
-      })
-      .catch((e) => {
-        if (engine.current !== client) return;
-        setState("Engine Error");
-        setEngineError(String(e));
-      });
-  }
+
   useEffect(() => {
-    connect();
     return () => {
-      engine.current?.dispose();
       completion.current?.dispose();
       cursorListener.current?.dispose();
     };
   }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       const warning = saveWorkspace(workspace);
@@ -213,6 +109,7 @@ export default function App() {
     }, 300);
     return () => clearTimeout(timer);
   }, [workspace]);
+
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (dirty) {
@@ -223,211 +120,27 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
-  const validate = useCallback(
-    async (sourceSnapshot?: string) => {
-      if (!engine.current || !ready) return;
-      const source = sourceSnapshot ?? current.current.source;
-      const dataset = current.current.dataset;
-      if (
-        validateDataset(dataset).length > 0 ||
-        Object.keys(draftErrorsRef.current).length > 0
-      ) {
-        lastValidatedDatasetRef.current = null;
-        if (semanticSourceRef.current !== source) {
-          setSemanticDiagnostics([]);
-          setSemanticSource("");
-        }
-        return;
-      }
-      lastValidatedDatasetRef.current = dataset;
-      const id = ++validateId.current;
-      try {
-        const result = await engine.current.request(
-          "validate",
-          source,
-          structuredClone(dataset),
-        );
-        if (
-          id !== validateId.current ||
-          source !== current.current.source ||
-          dataset !== current.current.dataset
-        ) {
-          return;
-        }
-        setSemanticDiagnostics(
-          result.diagnostics.filter((d) => d.severity !== "info"),
-        );
-        setSemanticSource(source);
-      } catch (e) {
-        if (lastValidatedDatasetRef.current === dataset) {
-          lastValidatedDatasetRef.current = null;
-        }
-        if (String(e).includes("Superseded") || id !== validateId.current)
-          return;
-        setSemanticDiagnostics([]);
-        setSemanticSource("");
-        setState("Engine Error");
-        setEngineError(String(e));
-      }
-    },
-    [ready],
-  );
-  const analyze = useCallback(async () => {
-    if (!engine.current || !ready) return;
-    const id = ++analysisId.current,
-      source = current.current.source;
-    setState("Analyzing");
-    const start = performance.now();
-    try {
-      const result = await engine.current.request("analyze", source);
-      if (id !== analysisId.current || source !== current.current.source)
-        return;
-      setAnalysis(result);
-      setAnalysisSource(source);
-      setState(result.success ? "Valid" : "Invalid");
-      log(
-        `Analysis ${result.success ? "passed" : "failed"} · ${result.tokenCount} tokens · ${(performance.now() - start).toFixed(1)} ms`,
-      );
-      if (
-        result.success &&
-        validateDataset(current.current.dataset).length === 0 &&
-        Object.keys(draftErrorsRef.current).length === 0
-      ) {
-        void validate(source);
-      } else {
-        validateId.current++;
-        lastValidatedDatasetRef.current = null;
-        setSemanticDiagnostics([]);
-        setSemanticSource("");
-      }
-    } catch (e) {
-      if (String(e).includes("Superseded") || id !== analysisId.current) return;
-      setState("Engine Error");
-      setEngineError(String(e));
-    }
-  }, [ready, validate]);
-  useEffect(() => {
-    if (workspace.autoAnalyze && ready) {
-      const timer = setTimeout(() => void analyze(), 180);
-      return () => clearTimeout(timer);
-    }
-  }, [workspace.source, workspace.autoAnalyze, ready, analyze]);
-  useEffect(() => {
-    if (
-      shouldScheduleDatasetValidation({
-        autoAnalyze: workspace.autoAnalyze,
-        ready,
-        analysisSuccess: analysis?.success,
-        errorCount: errors.length,
-        dataset: workspace.dataset,
-        lastValidatedDataset: lastValidatedDatasetRef.current,
-      })
-    ) {
-      const timer = setTimeout(() => void validate(), 180);
-      return () => clearTimeout(timer);
-    }
-  }, [
-    workspace.dataset,
-    workspace.autoAnalyze,
-    ready,
-    analysis?.success,
-    errors.length,
-    validate,
-  ]);
-  useEffect(() => {
-    const editorModel = editor.current?.getModel();
-    if (!editorModel) return;
-    const sync = resolveMarkerSync({
-      analysis,
-      analysisSource,
-      semanticDiagnostics,
-      semanticSource,
-      evaluation,
-      evalSource,
-      evalRevision,
-      revision: revision.current,
-      canValidate:
-        validateDataset(current.current.dataset).length === 0 &&
-        Object.keys(draftErrorsRef.current).length === 0,
-    });
-    if (sync.apply) {
-      applyModelMarkers(editorModel, sync.entries);
-    }
-  }, [
-    analysis,
-    analysisSource,
-    semanticDiagnostics,
-    semanticSource,
-    evaluation,
-    evalSource,
-    evalRevision,
-  ]);
+
   function sourceChanged(source: string) {
-    revision.current++;
-    analysisId.current++;
-    validateId.current++;
-    if (!current.current.autoAnalyze) {
-      lastValidatedDatasetRef.current = null;
-      setAnalysis(null);
-      setAnalysisSource("");
-      setSemanticDiagnostics([]);
-      setSemanticSource("");
-      setEvalRevision(-1);
-    }
+    studio.onSourceChanged();
     setWorkspace((w) => ({ ...w, source }));
-    setState(ready ? "Ready" : state);
   }
+
   function setDataset(dataset: Dataset) {
-    revision.current++;
-    validateId.current++;
-    const patch = getDatasetEditDiagnosticPatch(current.current.autoAnalyze);
-    setEvalRevision(patch.evalRevision);
-    if (patch.clearSemantic || validateDataset(dataset).length > 0) {
-      lastValidatedDatasetRef.current = null;
-      setSemanticDiagnostics([]);
-      setSemanticSource("");
-    }
-    if (ready) setState("Ready");
+    studio.onDatasetChanged(dataset);
     setWorkspace((w) => ({ ...w, dataset }));
   }
-  const setDraftError = useCallback(
-    (id: string, error: string) =>
-      setDraftErrors((old) => {
-        if (old[id] === error || (!old[id] && !error)) return old;
-        const next = { ...old };
-        if (error) next[id] = error;
-        else delete next[id];
-        draftErrorsRef.current = next;
-        return next;
-      }),
-    [],
-  );
-  async function evaluate() {
-    if (!engine.current || !ready || errors.length) return;
-    const rev = revision.current,
-      source = workspace.source,
-      data = structuredClone(workspace.dataset);
-    setState("Evaluating");
-    setTab("Evaluation Results");
-    const start = performance.now();
-    try {
-      const result = await engine.current.request("evaluate", source, data);
-      if (rev !== revision.current) {
-        setState(ready ? "Ready" : "Loading engine");
-        return;
-      }
-      setEvaluation(result);
-      setEvalSource(source);
-      setEvalRevision(rev);
-      setState(result.success ? "Valid" : "Invalid");
-      log(
-        `Evaluation ${result.success ? "completed" : "failed"} · ${result.results.length} patient results · ${(performance.now() - start).toFixed(1)} ms`,
-      );
-    } catch (e) {
-      setState("Engine Error");
-      setEngineError(String(e));
-    }
-  }
+
+  const setDraftError = useCallback((id: string, error: string) => {
+    setDraftErrors((old) => {
+      if (old[id] === error || (!old[id] && !error)) return old;
+      const next = { ...old };
+      if (error) next[id] = error;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+
   function navigate(d: Diagnostic, snapshotSource = workspace.source) {
     if (d.startOffset === undefined) {
       setShowData(true);
@@ -444,39 +157,28 @@ export default function App() {
     editor.current?.revealPositionInCenter(position);
     editor.current?.focus();
   }
+
   function replaceFile(
     source: string,
     filename: string,
     dataset = workspace.dataset,
   ) {
     if (dirty && !confirm("Discard unsaved source changes?")) return;
-    revision.current++;
-    analysisId.current++;
-    validateId.current++;
-    lastValidatedDatasetRef.current = null;
     baseline.current = source;
-    draftErrorsRef.current = {};
+    studio.onFileReplaced();
     setWorkspace((w) => ({
       ...w,
       source,
       filename,
       dataset: structuredClone(dataset),
     }));
-    setAnalysis(null);
-    setAnalysisSource("");
-    setSemanticDiagnostics([]);
-    setSemanticSource("");
-    setEvaluation(null);
-    setEvalSource("");
-    setEvalRevision(-1);
     setDraftErrors({});
-    const editorModel = editor.current?.getModel();
-    if (editorModel) monaco.editor.setModelMarkers(editorModel, "helix", []);
+    setFileEpoch((n) => n + 1);
     if (window.innerWidth <= 900) setShowSidebar(false);
     setTab("Problems");
-    log(`Opened ${filename}`);
+    studio.log(`Opened ${filename}`);
   }
-  const errorCount = diagnostics.filter((d) => d.severity === "error").length;
+
   return (
     <div className="studio">
       <header className="app-header">
@@ -521,7 +223,7 @@ export default function App() {
               download(workspace.filename, workspace.source);
               baseline.current = workspace.source;
               setWorkspace((w) => ({ ...w }));
-              log("Source downloaded");
+              studio.log("Source downloaded");
             }}
           >
             <Save size={15} />
@@ -530,17 +232,19 @@ export default function App() {
           <span className="toolbar-divider" />
           <button
             className="primary"
-            disabled={!ready}
-            onClick={() => void analyze()}
+            disabled={!studio.ready}
+            onClick={() => void studio.analyze()}
           >
             <Activity size={15} />
             Analyze
           </button>
           <button
             className="evaluate"
-            disabled={!ready || !!errors.length}
-            title={errors[0] ?? "Evaluate rules using the table snapshot"}
-            onClick={() => void evaluate()}
+            disabled={!studio.ready || !!studio.errors.length}
+            title={
+              studio.errors[0] ?? "Evaluate rules using the table snapshot"
+            }
+            onClick={() => void studio.evaluate()}
           >
             <Play size={14} fill="currentColor" />
             Evaluate
@@ -632,10 +336,10 @@ export default function App() {
           {storageWarning}
         </div>
       )}
-      {engineError && (
+      {studio.engineError && (
         <div className="error-strip" role="alert">
-          {engineError}
-          <button onClick={connect}>Retry engine</button>
+          {studio.engineError}
+          <button onClick={studio.connect}>Retry engine</button>
         </div>
       )}
       <div
@@ -696,12 +400,12 @@ export default function App() {
             <div className="sidebar-bottom">
               <div className="quick-stats">
                 <span>
-                  Tokens<strong>{analysis?.tokenCount ?? "—"}</strong>
+                  Tokens<strong>{studio.analysis?.tokenCount ?? "—"}</strong>
                 </span>
                 <span>
                   Problems
-                  <strong className={errorCount ? "error-text" : ""}>
-                    {errorCount}
+                  <strong className={studio.errorCount ? "error-text" : ""}>
+                    {studio.errorCount}
                   </strong>
                 </span>
               </div>
@@ -771,12 +475,11 @@ export default function App() {
                     autoSuggest: current.current.autoSuggest ?? true,
                   }),
                   getFilename: () => current.current.filename,
-                  getDiagnostics: () => diagnosticsRef.current,
                 };
                 completion.current = registerHelixLanguage(
                   m,
                   host,
-                  intellisense.current,
+                  intellisense,
                 );
               }}
               onMount={(e) => {
@@ -787,10 +490,7 @@ export default function App() {
                 );
                 const mountedModel = e.getModel();
                 if (mountedModel) {
-                  applyModelMarkers(
-                    mountedModel,
-                    latestDiagnosticEntriesRef.current,
-                  );
+                  studio.syncMountedMarkers(mountedModel);
                 }
               }}
               onChange={(value) => {
@@ -824,357 +524,57 @@ export default function App() {
               loading={<div className="empty-state">Loading editor…</div>}
             />
           </div>
-          <section
-            className="bottom-panel"
-            aria-label="Analysis and evaluation panels"
-          >
-            <div className="panel-tabs" role="tablist">
-              {tabs.map((t) => (
-                <button
-                  key={t}
-                  role="tab"
-                  id={`tab-${t.replaceAll(' ','-')}`}
-                  aria-controls="inspection-panel"
-                  tabIndex={tab===t?0:-1}
-                  onKeyDown={event=>{
-                    const at=tabs.indexOf(t);let next=at;
-                    if(event.key==='ArrowRight')next=(at+1)%tabs.length;
-                    else if(event.key==='ArrowLeft')next=(at+tabs.length-1)%tabs.length;
-                    else if(event.key==='Home')next=0;
-                    else if(event.key==='End')next=tabs.length-1;
-                    else return;
-                    event.preventDefault();setTab(tabs[next]);
-                    document.getElementById(`tab-${tabs[next].replaceAll(' ','-')}`)?.focus();
-                  }}
-                  aria-selected={tab === t}
-                  className={tab === t ? "active" : ""}
-                  onClick={() => setTab(t)}
-                >
-                  {t}
-                  {t === "Problems" && (
-                    <span className={`count ${errorCount ? "has-errors" : ""}`}>
-                      {diagnostics.length}
-                    </span>
-                  )}
-                  {t === "Evaluation Results" && evaluation && (
-                    <span className="count">{evaluation.results.length}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-            <div className="panel-content" id="inspection-panel" role="tabpanel" aria-labelledby={`tab-${tab.replaceAll(' ','-')}`}>
-              {tab === "Problems" &&
-                (diagnosticEntries.length ? (
-                  <div className="problem-list">
-                    {diagnosticEntries.map(({ d, source }, i) => (
-                      <button
-                        key={i}
-                        className="problem-row"
-                        onClick={() => navigate(d, source)}
-                      >
-                        <AlertCircle size={14} />
-                        <span className="small-tag">{d.category}</span>
-                        <span>{d.message}</span>
-                        <code>
-                          {d.line ? `Ln ${d.line}, Col ${d.column}` : d.code}
-                        </code>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state">
-                    <CheckCircle2 size={23} />
-                    <strong>
-                      {analysis?.success
-                        ? "No problems found"
-                        : "Ready for analysis"}
-                    </strong>
-                    <p>
-                      {analysis?.success
-                        ? "Your HELIX syntax is valid. Evaluation checks bindings and data."
-                        : "Analyze your program to see C-engine diagnostics."}
-                    </p>
-                  </div>
-                ))}
-              {tab === "Tokens" && (
-                <>
-                  <div className="token-toolbar">
-                    <Search size={14} />
-                    <input
-                      aria-label="Search tokens"
-                      placeholder="Filter lexeme, type or category…"
-                      value={tokenSearch}
-                      onChange={(e) => setTokenSearch(e.target.value)}
-                    />
-                    <span>{analysis?.tokenCount ?? 0} tokens</span>
-                  </div>
-                  <div className="token-scroll">
-                    <table className="token-table">
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Lexeme</th>
-                          <th>Token type</th>
-                          <th>Line</th>
-                          <th>Column</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {analysis?.tokens
-                          .filter((t) =>
-                            `${t.lexeme} ${t.type} ${t.category}`
-                              .toLowerCase()
-                              .includes(tokenSearch.toLowerCase()),
-                          )
-                          .map((t) => (
-                            <tr
-                              key={t.index}
-                              onClick={() =>
-                                navigate(
-                                  {
-                                    severity: "info",
-                                    category: "token",
-                                    code: t.type,
-                                    message: t.lexeme,
-                                    startOffset: t.startOffset,
-                                  },
-                                  analysisSource,
-                                )
-                              }
-                            >
-                              <td>{t.index}</td>
-                              <td>
-                                <code>{t.lexeme || "EOF"}</code>
-                              </td>
-                              <td className="muted">{t.type}</td>
-                              <td>{t.line}</td>
-                              <td>{t.column}</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-              {tab === "Evaluation Results" && (
-                <>
-                  <div className="simulation-disclaimer">
-                    Simulated Rule Output — Not for Clinical Use
-                  </div>
-                  {stale && (
-                    <div className="warning-strip">
-                      Results are from an earlier source or data snapshot.
-                      Evaluate again.
-                    </div>
-                  )}
-                  {evaluation ? (
-                    <>
-                      <div className="evaluation-summary">
-                        <strong>
-                          {evaluation.results.length} patient results
-                        </strong>
-                        <span>{evaluation.evaluationTime}</span>
-                        <span>
-                          {evaluation.success
-                            ? "Evaluation complete"
-                            : "Evaluation has errors"}
-                        </span>
-                      </div>
-                      {evaluation.diagnostics.map((d, i) => (
-                        <button
-                          key={i}
-                          className="problem-row"
-                          onClick={() => navigate(d, evalSource)}
-                        >
-                          <AlertCircle size={14} />
-                          {d.message}
-                        </button>
-                      ))}
-                      {evaluation.results.map((r) => (
-                        <details
-                          className="patient-result"
-                          key={`${r.ruleId}/${r.patientId}`}
-                          open
-                        >
-                          <summary>
-                            <span className="patient-id">{r.patientId}</span>
-                            <span>{r.ruleName}</span>
-                            <span className="result-badges">
-                              {r.conditions.map((c) => (
-                                <b
-                                  key={c.conditionId}
-                                  className={`outcome ${c.outcome.toLowerCase()}`}
-                                >
-                                  {c.outcome}
-                                </b>
-                              ))}
-                            </span>
-                          </summary>
-                          {r.conditions.map((c) => (
-                            <div
-                              className="condition-trace"
-                              key={c.conditionId}
-                            >
-                              <button
-                                className="condition-text"
-                                onClick={() =>
-                                  navigate(
-                                    {
-                                      severity: "info",
-                                      category: "condition",
-                                      code: c.conditionId,
-                                      message: c.conditionText,
-                                      startOffset: c.startOffset,
-                                    },
-                                    evalSource,
-                                  )
-                                }
-                              >
-                                {c.conditionText}
-                              </button>
-                              {c.resolvedValues.map((v, i) => (
-                                <div className="resolved-value" key={i}>
-                                  <code>{v.expression}</code>
-                                  <b>
-                                    {v.value === null
-                                      ? "MISSING"
-                                      : String(v.value)}
-                                  </b>
-                                  <span>
-                                    {v.table}.{v.column} ·{" "}
-                                    {v.rowIndex === null
-                                      ? "no eligible row"
-                                      : `row ${v.rowIndex + 1}`}
-                                  </span>
-                                  {v.reason && <small>{v.reason}</small>}
-                                </div>
-                              ))}
-                            </div>
-                          ))}
-                          {r.actions.map((a, i) => (
-                            <div
-                              key={i}
-                              className={`action-event ${a.kind} ${a.severity?.toLowerCase() ?? ""}`}
-                            >
-                              {a.kind === "alert" ? (
-                                <>
-                                  <AlertCircle size={14} />
-                                  <strong>{a.severity}</strong>
-                                  <span>{a.message}</span>
-                                  {!!a.payload?.length && (
-                                    <code>{JSON.stringify(a.payload)}</code>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  <span>Simulated suppression</span>
-                                  <code>
-                                    {a.durationMs
-                                      ? `${a.durationMs / 60000} minutes`
-                                      : a.reason}
-                                  </code>
-                                </>
-                              )}
-                            </div>
-                          ))}
-                          {!r.actions.length && (
-                            <p className="no-action">No action triggered</p>
-                          )}
-                        </details>
-                      ))}
-                    </>
-                  ) : (
-                    <div className="empty-state">
-                      <Play size={22} />
-                      <strong>Evaluate against your data</strong>
-                      <p>
-                        Run rules for each patient at the selected timestamp.
-                      </p>
-                    </div>
-                  )}
-                </>
-              )}
-              {tab === "Output" && (
-                <div className="output-log">
-                  <div>
-                    <Terminal size={14} /> Engine output
-                  </div>
-                  {logs.length ? (
-                    logs.map((line, i) => <p key={i}>{line}</p>)
-                  ) : (
-                    <p>No execution output yet.</p>
-                  )}
-                </div>
-              )}
-              {tab === "Grammar" && (
-                <div className="grammar-reference">
-                  <div className="grammar-links">
-                    {[
-                      "Reserved Words",
-                      "Expressions",
-                      "Declarations",
-                      "Actions",
-                    ].map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => {
-                          const area = document.querySelector(".grammar-text");
-                          if (area) {
-                            const match =
-                              s === "Reserved Words"
-                                ? "Reserved Words"
-                                : s === "Expressions"
-                                  ? "expression"
-                                  : s === "Declarations"
-                                    ? "Declarations"
-                                    : "Actions";
-                            const at = grammar.indexOf(match);
-                            area.scrollTop = Math.max(
-                              0,
-                              grammar.slice(0, at).split("\n").length * 18 - 40,
-                            );
-                          }
-                        }}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                  <pre className="grammar-text">{grammar}</pre>
-                </div>
-              )}
-            </div>
-          </section>
+          <InspectionPanel
+            tab={tab}
+            setTab={setTab}
+            diagnosticEntries={studio.diagnosticEntries}
+            diagnosticsCount={studio.diagnostics.length}
+            errorCount={studio.errorCount}
+            analysis={studio.analysis}
+            analysisSource={studio.analysisSource}
+            evaluation={studio.evaluation}
+            evalSource={studio.evalSource}
+            stale={studio.stale}
+            logs={studio.logs}
+            navigate={navigate}
+          />
         </main>
         {showData && (
           <DataPlayground
+            key={fileEpoch}
             dataset={workspace.dataset}
             setDataset={setDataset}
             setDraftError={setDraftError}
-          focusCell={dataFocus}
+            focusCell={dataFocus}
           />
         )}
       </div>
-      {errors.length > 0 && (
+      {studio.errors.length > 0 && (
         <div className="data-validation" role="alert">
           <Database size={14} />
           <strong>Dataset needs attention:</strong>
           <span>
-            {errors[0]}
-            {errors.length > 1 ? ` (+${errors.length - 1} more)` : ""}
+            {studio.errors[0]}
+            {studio.errors.length > 1
+              ? ` (+${studio.errors.length - 1} more)`
+              : ""}
           </span>
         </div>
       )}
       <footer className="status-bar">
         <span>
           <span
-            className={`status-dot ${state === "Engine Error" ? "failed" : ""}`}
+            className={`status-dot ${studio.state === "Engine Error" ? "failed" : ""}`}
           />
-          {state}
+          {studio.state}
         </span>
         <span>
-          {errorCount ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}{" "}
-          {errorCount} errors
+          {studio.errorCount ? (
+            <AlertCircle size={12} />
+          ) : (
+            <CheckCircle2 size={12} />
+          )}{" "}
+          {studio.errorCount} errors
         </span>
         <span className="status-spacer" />
         <span>
@@ -1184,7 +584,7 @@ export default function App() {
         <span>HELIX DSL</span>
         <span className="engine-status">
           <Zap size={12} />
-          {ready ? "C11 / WASM Engine Active" : "Engine unavailable"}
+          {studio.ready ? "C11 / WASM Engine Active" : "Engine unavailable"}
         </span>
       </footer>
     </div>

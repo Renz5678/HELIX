@@ -1,5 +1,20 @@
 import type { Analysis, Dataset, Diagnostic, Evaluation } from "./types";
 
+// shortcut: skip 180ms full-row WASM validate above 1,000 rows; upgrade if C11 adds metadata-only semantic check
+export const BACKGROUND_VALIDATE_MAX_ROWS = 1000;
+
+export function countDatasetRows(dataset: Dataset): number {
+  let total = 0;
+  for (const table of dataset.tables) {
+    total += table.rows.length;
+  }
+  return total;
+}
+
+export function isWithinBackgroundValidateLimit(dataset: Dataset): boolean {
+  return countDatasetRows(dataset) <= BACKGROUND_VALIDATE_MAX_ROWS;
+}
+
 export interface DiagnosticEntry {
   d: Diagnostic;
   source: string;
@@ -160,6 +175,7 @@ export function shouldScheduleDatasetValidation(input: {
       input.ready &&
       input.analysisSuccess &&
       input.errorCount === 0 &&
+      isWithinBackgroundValidateLimit(input.dataset) &&
       input.dataset !== input.lastValidatedDataset,
   );
 }

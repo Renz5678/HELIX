@@ -1,3 +1,4 @@
+import { positionFromLineStarts } from "./token-utils";
 import {
   HELIX_KEYWORD_SET,
   type LexComment,
@@ -506,25 +507,7 @@ export function offsetToPosition(source: string, offset: number): TextPosition {
     ? Math.max(0, Math.min(source.length, Math.floor(offset)))
     : 0;
   const lineStarts = computeLineStarts(source);
-
-  let low = 0;
-  let high = lineStarts.length - 1;
-  let best = 0;
-
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (lineStarts[mid] <= clamped) {
-      best = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-
-  return {
-    lineNumber: best + 1,
-    column: clamped - lineStarts[best] + 1,
-  };
+  return positionFromLineStarts(lineStarts, source.length, clamped);
 }
 
 /**

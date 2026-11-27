@@ -1,19 +1,28 @@
 import { tokenizeHelix } from "./lexer";
 import { columnTypeToValueType, type DatasetSchemaIndex } from "./schema";
-import {
-  MEMBER_KEYWORDS,
-  type BlockNode,
-  type DocumentIndex,
-  type IdentifierRef,
-  type LexComment,
-  type LexToken,
-  type SymbolEntry,
-  type TerminologyOccurrence,
-  type TerminologySystem,
-  type TextPosition,
-  type TextRange,
-  type ValueType,
+import * as tokenUtils from "./token-utils";
+import type {
+  BlockNode,
+  DocumentIndex,
+  IdentifierRef,
+  LexComment,
+  LexToken,
+  SymbolEntry,
+  TerminologyOccurrence,
+  TextRange,
+  ValueType,
 } from "./types";
+
+const {
+  ARITHMETIC_OPERATORS,
+  COMPARISON_OPERATORS,
+  isKeyword,
+  isMemberNameToken,
+  positionFromLineStarts: posAtOffset,
+  spanRange,
+  tokenRange,
+  toTerminologySystem,
+} = tokenUtils;
 
 const LARGE_FILE_BYTE_LIMIT = 262_144;
 
@@ -40,9 +49,6 @@ const STATEMENT_STOP_KEYWORDS = new Set([
   "end",
 ]);
 
-const COMPARISON_OPERATORS = new Set(["==", "!=", "<", "<=", ">", ">=", "="]);
-const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
-
 interface ActiveBlockMeta {
   blockIndex: number;
   varScope: Map<string, number>;
@@ -60,79 +66,12 @@ interface DocumentIndexMeta {
 
 const documentMetaCache = new WeakMap<DocumentIndex, DocumentIndexMeta>();
 
-function tokenRange(tok: LexToken): TextRange {
-  return {
-    startLineNumber: tok.line,
-    startColumn: tok.column,
-    endLineNumber: tok.endLine,
-    endColumn: tok.endColumn,
-  };
-}
-
-function spanRange(start: LexToken, end: LexToken): TextRange {
-  return {
-    startLineNumber: start.line,
-    startColumn: start.column,
-    endLineNumber: end.endLine,
-    endColumn: end.endColumn,
-  };
-}
-
-function posAtOffset(
-  lineStarts: readonly number[],
-  sourceLength: number,
-  offset: number,
-): TextPosition {
-  const clamped = Math.max(0, Math.min(sourceLength, Math.floor(offset)));
-  let low = 0;
-  let high = lineStarts.length - 1;
-  let best = 0;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (lineStarts[mid] <= clamped) {
-      best = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return {
-    lineNumber: best + 1,
-    column: clamped - lineStarts[best] + 1,
-  };
-}
-
-function isKeyword(tok: LexToken | undefined, lexeme: string): boolean {
-  return tok !== undefined && tok.kind === "keyword" && tok.lexeme === lexeme;
-}
-
 function isDotOrArrow(tok: LexToken | undefined): boolean {
   return (
     tok !== undefined &&
     ((tok.kind === "delimiter" && tok.lexeme === ".") ||
       (tok.kind === "operator" && tok.lexeme === "->"))
   );
-}
-
-function isMemberNameToken(tok: LexToken | undefined): boolean {
-  if (!tok) return false;
-  return (
-    tok.kind === "identifier" ||
-    (tok.kind === "keyword" && MEMBER_KEYWORDS.has(tok.lexeme))
-  );
-}
-
-function toTerminologySystem(lexeme: string): TerminologySystem | null {
-  switch (lexeme.toUpperCase()) {
-    case "LOINC":
-      return "LOINC";
-    case "SNOMED":
-      return "SNOMED";
-    case "RXNORM":
-      return "RxNorm";
-    default:
-      return null;
-  }
 }
 
 function sliceCollapsed(source: string, start: number, end: number): string | undefined {

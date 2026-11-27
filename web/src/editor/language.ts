@@ -4,7 +4,6 @@ import { HelixIntelliSense } from "./intellisense/engine";
 import type { MarkerInput, OutlineSymbol, OutlineSymbolKind } from "./intellisense/providers";
 import {
   HELIX_KEYWORDS,
-  type Dataset,
   type HelixLanguageHost,
   type TextRange,
 } from "./intellisense/types";
@@ -119,45 +118,6 @@ function markerToInput(m: Monaco.editor.IMarker): MarkerInput {
       endColumn: m.endColumn,
     },
     severity: m.severity,
-  };
-}
-
-function wrapLegacyTablesHost(getTables: () => string[]): HelixLanguageHost {
-  let lastNames: string[] | null = null;
-  let cachedDataset: Dataset = {
-    schemaVersion: 1,
-    evaluationTime: "",
-    Bindings: {},
-    tables: [],
-  };
-
-  return {
-    getDataset: () => {
-      const names = getTables();
-      if (
-        lastNames === null ||
-        lastNames.length !== names.length ||
-        lastNames.some((n, i) => n !== names[i])
-      ) {
-        lastNames = [...names];
-        cachedDataset = {
-          schemaVersion: 1,
-          evaluationTime: "",
-          Bindings: {},
-          tables: names.map((name) => ({
-            name,
-            patientIdColumn: "patient_id",
-            timestampColumn: "timestamp",
-            defaultValueColumn: "value",
-            columns: [{ name: "value", type: "Float" }],
-            rows: [],
-          })),
-        };
-      }
-      return cachedDataset;
-    },
-    getSettings: () => ({ inlinePredictions: true, autoSuggest: true }),
-    getFilename: () => "",
   };
 }
 
@@ -486,20 +446,4 @@ export function registerHelixLanguage(
       engine.clearCache();
     },
   };
-}
-
-/**
- * Registers HELIX language support. Accepts either a full `HelixLanguageHost`
- * or a legacy `() => string[]` table-name callback until App.tsx migrates.
- */
-export function register(
-  monaco: typeof Monaco,
-  hostOrGetTables: HelixLanguageHost | (() => string[]),
-  engine?: HelixIntelliSense,
-): Monaco.IDisposable {
-  const host =
-    typeof hostOrGetTables === "function"
-      ? wrapLegacyTablesHost(hostOrGetTables)
-      : hostOrGetTables;
-  return registerHelixLanguage(monaco, host, engine);
 }

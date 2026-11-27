@@ -12,6 +12,12 @@ import {
 import { columnTypeToValueType, type DatasetSchemaIndex } from "./schema";
 import { searchTerms, TERMINOLOGY_SYSTEMS } from "./terminology";
 import {
+  findUniqueNumericLetForSeries,
+  isComparisonOperatorInCurrentClause,
+  SHORT_MINUTE_PRESETS,
+  SYNTAX_ONLY_NOTE,
+} from "./token-utils";
+import {
   EXECUTOR_TIME_UNITS,
   HELIX_KEYWORD_SET,
   MEMBER_KEYWORDS,
@@ -52,25 +58,13 @@ export interface CompletionCandidate {
   contextKind: CursorContextKind;
 }
 
-export const SYNTAX_ONLY_DETAIL = "Syntax-only (not evaluated in Studio)";
+export const SYNTAX_ONLY_DETAIL = SYNTAX_ONLY_NOTE;
 
 const PRIMARY_TIME_UNITS = new Set([
   "minutes",
   "hours",
   "days",
   "seconds",
-]);
-
-const SHORT_MINUTE_PRESETS = new Set([15, 30, 45, 60]);
-
-const COMPARISON_OP_TOKENS = new Set([
-  "==",
-  "!=",
-  "<",
-  "<=",
-  ">",
-  ">=",
-  "=",
 ]);
 
 const GENERIC_ALIAS_SUFFIXES =
@@ -170,7 +164,12 @@ function deriveBindAliases(
     const lastDot = key.lastIndexOf(".");
     const suffix = lastDot !== -1 ? key.slice(lastDot + 1) : key;
     pushAlias(suffix);
-    if (target.columnName && !GENERIC_ALIAS_SUFFIXES.test(`_${target.columnName}`)) {
+    if (
+      target.columnName &&
+      target.columnName !== "value" &&
+      target.columnName !== "val" &&
+      !GENERIC_ALIAS_SUFFIXES.test(`_${target.columnName}`)
+    ) {
       pushAlias(target.columnName);
     }
   }
@@ -289,80 +288,6 @@ function isInsideQuotesBeforeCursor(
 ): boolean {
   const quoteIdx = ctx.offset - ctx.prefix.length - 1;
   return quoteIdx >= 0 && doc.source[quoteIdx] === '"';
-}
-
-function isComparisonOperatorInCurrentClause(
-  doc: DocumentIndex,
-  ctx: CursorContext,
-): boolean {
-  let innerWhenStart = 0;
-  for (let i = ctx.openBlocks.length - 1; i >= 0; i--) {
-    if (ctx.openBlocks[i].kind === "when") {
-      innerWhenStart = ctx.openBlocks[i].openOffset;
-      break;
-    }
-  }
-  const limitOffset = ctx.offset - ctx.prefix.length;
-  const relevant: typeof doc.tokens = [];
-  for (const tok of doc.tokens) {
-    if (tok.kind === "eof") break;
-    if (tok.startOffset < innerWhenStart) continue;
-    if (tok.endOffset > limitOffset) break;
-    relevant.push(tok);
-  }
-
-  let depth = 0;
-  for (let i = relevant.length - 1; i >= 0; i--) {
-    const t = relevant[i];
-    if (t.kind === "delimiter" && (t.lexeme === ")" || t.lexeme === "]")) {
-      depth++;
-    } else if (t.kind === "delimiter" && (t.lexeme === "(" || t.lexeme === "[")) {
-      if (depth > 0) depth--;
-      else break;
-    } else if (depth === 0) {
-      if (
-        (t.kind === "keyword" &&
-          (t.lexeme === "when" ||
-            t.lexeme === "and" ||
-            t.lexeme === "or" ||
-            t.lexeme === "not")) ||
-        (t.kind === "delimiter" && (t.lexeme === ":" || t.lexeme === ","))
-      ) {
-        break;
-      }
-      if (t.kind === "operator" && COMPARISON_OP_TOKENS.has(t.lexeme)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function findUniqueNumericLetForSeries(
-  visible: readonly SymbolEntry[],
-  seriesSym: SymbolEntry,
-): SymbolEntry | null {
-  const numLets = visible.filter(
-    (s) => s.kind === "let" && s.valueType === "Number",
-  );
-  if (numLets.length === 0) return null;
-
-  const seriesStems = new Set<string>([
-    ...extractStems(seriesSym.name),
-    ...(seriesSym.resolvedTarget
-      ? extractStems(seriesSym.resolvedTarget.columnName)
-      : []),
-  ]);
-
-  if (seriesStems.size > 0) {
-    const matched = numLets.filter((v) =>
-      extractStems(v.name).some((stem) => seriesStems.has(stem)),
-    );
-    if (matched.length === 1) return matched[0];
-    if (matched.length > 1) return null;
-  }
-
-  return numLets.length === 1 ? numLets[0] : null;
 }
 
 function prefixMatchBoost(
@@ -527,14 +452,39 @@ function buildRuleBody(
       ? String(Math.round(target.sampleMax))
       : "100";
 
-  const whenSnippet = [
-    `when \${1:${whenSeriesExpr}} > \${2:${thresholdExpr}}:`,
-    `then:`,
-    `    alert: "\${3:Clinical condition met}", "\${4|WARNING,CRITICAL,INFO|}"`,
-    `otherwise:`,
-    `    \${5:suppress: within 4 hours}`,
-    `end when`,
-  ].join("\n");
+  const whenValueType: ValueType = primarySeries
+    ? seriesValueType(primarySeries)
+    : target.columnType
+      ? columnTypeToValueType(target.columnType as Parameters<typeof columnTypeToValueType>[0])
+      : "Number";
+
+  const whenSnippet =
+    whenValueType === "Boolean"
+      ? [
+          `when \${1:${whenSeriesExpr}}:`,
+          `then:`,
+          `    alert: "\${2:Clinical condition met}", "\${3|WARNING,CRITICAL,INFO|}"`,
+          `otherwise:`,
+          `    \${4:suppress: within 4 hours}`,
+          `end when`,
+        ].join("\n")
+      : whenValueType === "String"
+        ? [
+            `when \${1:${whenSeriesExpr}} == "\${2:final}":`,
+            `then:`,
+            `    alert: "\${3:Clinical condition met}", "\${4|WARNING,CRITICAL,INFO|}"`,
+            `otherwise:`,
+            `    \${5:suppress: within 4 hours}`,
+            `end when`,
+          ].join("\n")
+        : [
+            `when \${1:${whenSeriesExpr}} > \${2:${thresholdExpr}}:`,
+            `then:`,
+            `    alert: "\${3:Clinical condition met}", "\${4|WARNING,CRITICAL,INFO|}"`,
+            `otherwise:`,
+            `    \${5:suppress: within 4 hours}`,
+            `end when`,
+          ].join("\n");
 
   const filterTarget = (() => {
     for (const [path, resolved] of schema.bindings.entries()) {
@@ -937,7 +887,11 @@ function buildMemberAccess(
         ctx.inWhen &&
         !ctx.hasThen &&
         (targetType === "Number" || targetType === "Unknown") &&
-        !isComparisonOperatorInCurrentClause(doc, ctx)
+        !isComparisonOperatorInCurrentClause(
+          doc,
+          ctx.offset - ctx.prefix.length,
+          ctx.openBlocks,
+        )
       ) {
         const matchedLet = findUniqueNumericLetForSeries(visible, ownerSym);
         if (matchedLet) {
@@ -1082,7 +1036,9 @@ function buildComparisonRhs(
   }
 
   if (ctx.lhsHintName) {
-    const hintSym = visible.find((s) => s.name === ctx.lhsHintName);
+    const hintSym = visible.find(
+      (s) => s.name === ctx.lhsHintName && s.kind !== "rule",
+    );
     const resolved =
       hintSym?.resolvedTarget ?? schema.resolvePath(ctx.lhsHintName);
     if (resolved) {
@@ -1595,12 +1551,15 @@ export function buildCompletions(
             scoreInput: { base: 920 - idx * 2 },
           };
         }),
-        ...Array.from(schema.bindings.entries()).map(([key, target], idx) => ({
-          label: key,
-          kind: "property" as const,
-          detail: `Binding -> ${target.tableName}.${target.columnName}`,
-          scoreInput: { base: 890 - idx * 2 },
-        })),
+        // C11 `source` only parses a single IDENTIFIER; omit dotted bindings like `Labs.glucose`.
+        ...Array.from(schema.bindings.entries())
+          .filter(([key]) => !key.includes("."))
+          .map(([key, target], idx) => ({
+            label: key,
+            kind: "property" as const,
+            detail: `Binding -> ${target.tableName}.${target.columnName}`,
+            scoreInput: { base: 890 - idx * 2 },
+          })),
         {
           label: "EHR",
           kind: "value",
@@ -1865,12 +1824,18 @@ export function buildCompletions(
               : []),
             ...(ctx.inWhen && !ctx.hasThen
               ? [
-                  {
-                    label: "then:",
-                    kind: "keyword" as const,
-                    detail: "Begin `then:` action branch",
-                    scoreInput: { base: 880 },
-                  },
+                  ...([...ctx.openBlocks]
+                    .reverse()
+                    .find((b) => b.kind === "when")?.thenOffset === null
+                    ? [
+                        {
+                          label: "then:",
+                          kind: "keyword" as const,
+                          detail: "Begin `then:` action branch",
+                          scoreInput: { base: 880 },
+                        },
+                      ]
+                    : []),
                   {
                     label: "and",
                     kind: "keyword" as const,

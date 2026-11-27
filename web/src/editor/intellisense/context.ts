@@ -1,17 +1,26 @@
-import {
-  isOffsetInComment,
-  offsetToPosition,
-  positionToOffset,
-} from "./lexer";
 import { columnTypeToValueType, type DatasetSchemaIndex } from "./schema";
 import { openBlocksAt, visibleSymbolsAt } from "./document-index";
 import {
+  ARITHMETIC_OPERATORS,
+  COMPARISON_OPERATORS,
+  CONTINUATION_OPERATORS,
+  findFirstTokenIndexAtOrAfter as firstTokenIndexAtOrAfter,
+  isDelimiter,
+  isKeyword,
+  isMemberNameToken,
+  isOperator,
+  isStrictlyInsideComment,
+  offsetFromLineStarts,
+  positionFromLineStarts as posFromLineStarts,
+  tokenRange,
+  toTerminologySystem,
+  zeroWidthRange,
+} from "./token-utils";
+import {
   EXECUTOR_TIME_UNITS,
-  MEMBER_KEYWORDS,
   PARSER_ONLY_TIME_UNITS,
   type BlockNode,
   type DocumentIndex,
-  type LexComment,
   type LexToken,
   type SymbolEntry,
   type TerminologySystem,
@@ -84,18 +93,6 @@ const VALID_TIME_UNITS = new Set<string>([
   ...PARSER_ONLY_TIME_UNITS,
 ]);
 
-const COMPARISON_OPERATORS = new Set([
-  "==",
-  "!=",
-  "<",
-  "<=",
-  ">",
-  ">=",
-  "=",
-]);
-
-const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
-
 const BIND_OPERATORS = new Set([":=", "=", ":", "->"]);
 
 const GENERIC_HINT_COLUMNS = new Set([
@@ -121,64 +118,6 @@ const STATEMENT_START_KEYWORDS = new Set([
   "end",
 ]);
 
-const CONTINUATION_OPERATORS = new Set([
-  ":=",
-  "=",
-  "==",
-  "!=",
-  "<",
-  "<=",
-  ">",
-  ">=",
-  "+",
-  "-",
-  "*",
-  "/",
-  "->",
-]);
-
-function tokenRange(tok: LexToken): TextRange {
-  return {
-    startLineNumber: tok.line,
-    startColumn: tok.column,
-    endLineNumber: tok.endLine,
-    endColumn: tok.endColumn,
-  };
-}
-
-function zeroWidthRange(pos: TextPosition): TextRange {
-  return {
-    startLineNumber: pos.lineNumber,
-    startColumn: pos.column,
-    endLineNumber: pos.lineNumber,
-    endColumn: pos.column,
-  };
-}
-
-function posFromLineStarts(
-  lineStarts: readonly number[],
-  sourceLength: number,
-  offset: number,
-): TextPosition {
-  const clamped = Math.max(0, Math.min(sourceLength, Math.floor(offset)));
-  let low = 0;
-  let high = lineStarts.length - 1;
-  let best = 0;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (lineStarts[mid] <= clamped) {
-      best = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return {
-    lineNumber: best + 1,
-    column: clamped - lineStarts[best] + 1,
-  };
-}
-
 function rangeFromOffsets(
   doc: DocumentIndex,
   startOffset: number,
@@ -192,63 +131,6 @@ function rangeFromOffsets(
     endLineNumber: end.lineNumber,
     endColumn: end.column,
   };
-}
-
-function isKeyword(tok: LexToken | undefined, lexeme: string): boolean {
-  return tok !== undefined && tok.kind === "keyword" && tok.lexeme === lexeme;
-}
-
-function isDelimiter(tok: LexToken | undefined, lexeme: string): boolean {
-  return tok !== undefined && tok.kind === "delimiter" && tok.lexeme === lexeme;
-}
-
-function isOperator(tok: LexToken | undefined, lexeme: string): boolean {
-  return tok !== undefined && tok.kind === "operator" && tok.lexeme === lexeme;
-}
-
-function isMemberNameToken(tok: LexToken | undefined): tok is LexToken {
-  if (!tok) return false;
-  return (
-    tok.kind === "identifier" ||
-    (tok.kind === "keyword" && MEMBER_KEYWORDS.has(tok.lexeme))
-  );
-}
-
-function toTerminologySystem(lexeme: string): TerminologySystem | null {
-  switch (lexeme.toUpperCase()) {
-    case "LOINC":
-      return "LOINC";
-    case "SNOMED":
-      return "SNOMED";
-    case "RXNORM":
-      return "RxNorm";
-    default:
-      return null;
-  }
-}
-
-/**
- * Checks whether `offset` is strictly inside a `#` comment (`startOffset < offset <= endOffset`).
- * Cursor at `comment.startOffset` (immediately before `#`) is code context, not comment.
- */
-function isStrictlyInsideComment(
-  comments: readonly LexComment[],
-  offset: number,
-): boolean {
-  if (!isOffsetInComment(comments, offset)) return false;
-  let low = 0;
-  let high = comments.length - 1;
-  let best = -1;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (comments[mid].startOffset <= offset) {
-      best = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return best !== -1 && offset > comments[best].startOffset && offset <= comments[best].endOffset;
 }
 
 function findTokenAtOffset(
@@ -299,39 +181,8 @@ function findFirstTokenAtOrAfter(
   tokens: readonly LexToken[],
   offset: number,
 ): LexToken | undefined {
-  let low = 0;
-  let high = tokens.length - 1;
-  let best = -1;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (tokens[mid].startOffset >= offset) {
-      best = mid;
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-  return best !== -1 ? tokens[best] : undefined;
-}
-
-function firstTokenIndexAtOrAfter(
-  tokens: readonly LexToken[],
-  startOffset: number,
-  endIndex: number,
-): number {
-  let low = 0;
-  let high = endIndex - 1;
-  let best = endIndex;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (tokens[mid].startOffset >= startOffset) {
-      best = mid;
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-  return best;
+  const idx = firstTokenIndexAtOrAfter(tokens, offset);
+  return idx < tokens.length ? tokens[idx] : undefined;
 }
 
 /**
@@ -412,6 +263,7 @@ function makeBaseContext(
   if (innerWhen) {
     ctx.hasThen =
       innerWhen.thenOffset !== null &&
+      innerWhen.thenOffset < offset &&
       activeWordStartOffset !== innerWhen.thenOffset;
     ctx.hasOtherwise =
       innerWhen.otherwiseOffset !== null &&
@@ -1645,8 +1497,8 @@ export function analyzeCursorContext(
   schema: DatasetSchemaIndex,
   position: TextPosition,
 ): CursorContext {
-  const offset = positionToOffset(doc.source, position);
-  const normPos = offsetToPosition(doc.source, offset);
+  const offset = offsetFromLineStarts(doc.source, doc.lineStarts, position);
+  const normPos = posFromLineStarts(doc.lineStarts, doc.source.length, offset);
   const zeroRange = zeroWidthRange(normPos);
 
   if (isStrictlyInsideComment(doc.comments, offset)) {

@@ -227,5 +227,4 @@ export interface HelixLanguageHost {
   getDataset: () => Dataset;
   getSettings: () => HelixLanguageSettings;
   getFilename: () => string;
-  getDiagnostics?: () => Diagnostic[];
 }

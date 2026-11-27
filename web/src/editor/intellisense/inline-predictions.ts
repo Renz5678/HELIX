@@ -2,6 +2,14 @@ import type { CursorContext } from "./context";
 import { visibleSymbolsAt } from "./document-index";
 import { extractStems } from "./ranking";
 import { columnTypeToValueType, type DatasetSchemaIndex } from "./schema";
+import {
+  findFirstTokenIndexAtOrAfter,
+  findLastTokenIndexEndingAtOrBefore,
+  findUniqueNumericLetForSeries,
+  isComparisonOperatorInCurrentClause,
+  SHORT_MINUTE_PRESETS,
+  zeroWidthRange,
+} from "./token-utils";
 import type {
   BlockNode,
   DocumentIndex,
@@ -15,18 +23,6 @@ export interface InlinePrediction {
   insertText: string;
   range: TextRange;
 }
-
-const SHORT_MINUTE_PRESETS = new Set([15, 30, 45, 60]);
-
-const COMPARISON_OP_TOKENS = new Set([
-  "==",
-  "!=",
-  "<",
-  "<=",
-  ">",
-  ">=",
-  "=",
-]);
 
 function findLineEnd(source: string, start: number): number {
   let i = start;
@@ -88,15 +84,6 @@ function getCursorLineState(
   };
 }
 
-function zeroWidthRange(pos: TextPosition): TextRange {
-  return {
-    startLineNumber: pos.lineNumber,
-    startColumn: pos.column,
-    endLineNumber: pos.lineNumber,
-    endColumn: pos.column,
-  };
-}
-
 function makePrediction(
   pos: TextPosition,
   insertText: string,
@@ -133,45 +120,6 @@ function findNextNonEmptyLineTrimmed(
   return "";
 }
 
-function findFirstTokenIndexAtOrAfter(
-  tokens: readonly LexToken[],
-  offset: number,
-): number {
-  let low = 0;
-  let high = tokens.length - 1;
-  let best = tokens.length;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    if (tokens[mid].startOffset >= offset) {
-      best = mid;
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-  return best;
-}
-
-function findLastTokenIndexEndingAtOrBefore(
-  tokens: readonly LexToken[],
-  offset: number,
-): number {
-  let low = 0;
-  let high = tokens.length - 1;
-  let best = -1;
-  while (low <= high) {
-    const mid = (low + high) >>> 1;
-    const tok = tokens[mid];
-    if (tok.kind !== "eof" && tok.endOffset <= offset) {
-      best = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return best;
-}
-
 function hasTokensInRange(
   tokens: readonly LexToken[],
   startOffset: number,
@@ -203,51 +151,6 @@ function hasUnclosedGroupingInRange(
     idx++;
   }
   return depth > 0;
-}
-
-function isComparisonOperatorInCurrentClause(
-  doc: DocumentIndex,
-  limitOffset: number,
-  openBlocks: readonly BlockNode[],
-): boolean {
-  let innerWhenStart = 0;
-  for (let i = openBlocks.length - 1; i >= 0; i--) {
-    if (openBlocks[i].kind === "when") {
-      innerWhenStart = openBlocks[i].openOffset;
-      break;
-    }
-  }
-
-  let depth = 0;
-  const lastIdx = findLastTokenIndexEndingAtOrBefore(doc.tokens, limitOffset);
-  for (let i = lastIdx; i >= 0; i--) {
-    const t = doc.tokens[i];
-    if (t.startOffset < innerWhenStart) break;
-    if (t.kind === "delimiter" && (t.lexeme === ")" || t.lexeme === "]")) {
-      depth++;
-    } else if (
-      t.kind === "delimiter" &&
-      (t.lexeme === "(" || t.lexeme === "[")
-    ) {
-      if (depth > 0) depth--;
-      else break;
-    } else if (depth === 0) {
-      if (
-        (t.kind === "keyword" &&
-          (t.lexeme === "when" ||
-            t.lexeme === "and" ||
-            t.lexeme === "or" ||
-            t.lexeme === "not")) ||
-        (t.kind === "delimiter" && (t.lexeme === ":" || t.lexeme === ","))
-      ) {
-        break;
-      }
-      if (t.kind === "operator" && COMPARISON_OP_TOKENS.has(t.lexeme)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 function isInWhenConditionClause(
@@ -298,33 +201,6 @@ function isInWhenConditionClause(
     );
   }
   return false;
-}
-
-function findUniqueNumericLetForSeries(
-  visible: readonly SymbolEntry[],
-  seriesSym: SymbolEntry,
-): SymbolEntry | null {
-  const numLets = visible.filter(
-    (s) => s.kind === "let" && s.valueType === "Number",
-  );
-  if (numLets.length === 0) return null;
-
-  const seriesStems = new Set<string>([
-    ...extractStems(seriesSym.name),
-    ...(seriesSym.resolvedTarget
-      ? extractStems(seriesSym.resolvedTarget.columnName)
-      : []),
-  ]);
-
-  if (seriesStems.size > 0) {
-    const matched = numLets.filter((v) =>
-      extractStems(v.name).some((stem) => seriesStems.has(stem)),
-    );
-    if (matched.length === 1) return matched[0];
-    if (matched.length > 1) return null;
-  }
-
-  return numLets.length === 1 ? numLets[0] : null;
 }
 
 function matchesAliasCandidate(

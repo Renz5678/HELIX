@@ -35,13 +35,6 @@ export interface ScoreInput {
   syntaxOnly?: boolean;
 }
 
-export interface RankedCandidate {
-  label: string;
-  score: number;
-  sortText: string;
-  syntaxOnly?: boolean;
-}
-
 /**
  * Per-session in-memory MRU acceptance tracker capped at 100 entries.
  * Never persists to localStorage.

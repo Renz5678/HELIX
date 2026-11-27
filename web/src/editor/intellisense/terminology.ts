@@ -4,7 +4,6 @@ export type { TerminologySystem };
 
 export interface TerminologySystemInfo {
   label: string;
-  cls: string;
   uri: string;
 }
 
@@ -19,11 +18,10 @@ export interface TerminologyEntry {
 export const TERMINOLOGY_SYSTEMS: Readonly<
   Record<TerminologySystem, TerminologySystemInfo>
 > = {
-  LOINC: { label: "LOINC", cls: "loinc", uri: "http://loinc.org" },
-  SNOMED: { label: "SNOMED-CT", cls: "snomed", uri: "http://snomed.info/sct" },
+  LOINC: { label: "LOINC", uri: "http://loinc.org" },
+  SNOMED: { label: "SNOMED-CT", uri: "http://snomed.info/sct" },
   RxNorm: {
     label: "RxNorm",
-    cls: "rxnorm",
     uri: "http://www.nlm.nih.gov/research/umls/rxnorm",
   },
 };

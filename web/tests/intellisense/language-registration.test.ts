@@ -3,7 +3,6 @@ import glucoseData from "../../../examples/data/glucose.json";
 import type { Dataset } from "../../src/services/types";
 import {
   registerHelixLanguage,
-  register,
   keywords,
 } from "../../src/editor/language";
 import { HelixIntelliSense } from "../../src/editor/intellisense/engine";
@@ -343,23 +342,5 @@ describe("Monaco HELIX language registration", () => {
 
     disp.dispose();
     expect(clearSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("supports legacy register(monaco, getTables) wrapper until App.tsx migration", () => {
-    const { monacoMock, registeredProviders } = makeFakeMonaco();
-    const disp = register(monacoMock as never, () => ["vitals_bp"]);
-    const completionProvider = registeredProviders.completion as {
-      provideCompletionItems: (
-        m: unknown,
-        pos: { lineNumber: number; column: number },
-      ) => { suggestions: Array<{ label: string }> };
-    };
-    const model = makeFakeModel("rule Test:\n    source ");
-    const result = completionProvider.provideCompletionItems(model, {
-      lineNumber: 2,
-      column: 12,
-    });
-    expect(result.suggestions.some((s) => s.label === "vitals_bp")).toBe(true);
-    disp.dispose();
   });
 });

@@ -8,7 +8,7 @@ import {
   computeInlinePrediction,
   type InlinePrediction,
 } from "./inline-predictions";
-import { positionToOffset } from "./lexer";
+import { offsetFromLineStarts } from "./token-utils";
 import {
   computeDefinition,
   computeDocumentSymbols,
@@ -102,7 +102,7 @@ export class HelixIntelliSense {
     pos: TextPosition,
   ): string | null {
     const { doc } = this.getDocument(uri, versionId, source, dataset);
-    const offset = positionToOffset(doc.source, pos);
+    const offset = offsetFromLineStarts(doc.source, doc.lineStarts, pos);
     return activeRuleAt(doc, offset)?.name ?? null;
   }
 
